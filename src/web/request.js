@@ -23,6 +23,42 @@ const DEFAULT_MAX_REDIRECTS = 10
 const DEFAULT_MAX_BYTES = 100 * 1024 * 1024
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
 
+// Options the main Node entry supports but this fetch-based build cannot
+// honor (no Node http stack, no cookie jar, no proxy/tunnel, no agent
+// pool, ...). Silently ignoring them would give callers different behavior
+// than they asked for; fail loudly instead.
+const UNSUPPORTED_OPTIONS = [
+  'retry',
+  'jar',
+  'proxy',
+  'cache',
+  'paginate',
+  'mock',
+  'http2',
+  'forever',
+  'pool',
+  'agent',
+  'agentOptions',
+  'progress',
+  'dnsCache',
+  'lookup',
+  'tunnel',
+  'multipart',
+  'localAddress',
+  'family',
+  'strictSSL',
+  'rejectUnauthorized',
+  'ca',
+  'cert',
+  'key',
+  'pfx',
+  'passphrase',
+  'ciphers',
+  'secureProtocol',
+  'secureOptions',
+  'checkServerIdentity'
+]
+
 // In-flight request coalescing (`dedupe: true`). Web responses are
 // buffered plain objects, so waiters are simply handed copies of the
 // settled result - no stream tee-ing involved. Keyed like the main
@@ -145,6 +181,18 @@ function isBodyTypeSupported (value) {
 class WebRequest {
   constructor (options) {
     makeEmitter(this)
+
+    // Options this entry cannot honor are rejected up front rather than
+    // silently ignored: a caller migrating from the Node client must not
+    // get different behavior without noticing.
+    for (const name of UNSUPPORTED_OPTIONS) {
+      if (options[name] !== undefined) {
+        const err = new Error('The web/edge entry does not support options.' + name + '; use the Node entry ("@zelthr/request") instead')
+        err.code = 'EUNSUPPORTED'
+        throw err
+      }
+    }
+
     this._controller = new AbortController()
     this._aborted = false
     this._errored = false
@@ -234,6 +282,13 @@ class WebRequest {
   }
 
   _buildBody (options) {
+    if (options.formData !== undefined && !(options.formData instanceof FormData)) {
+      // The Node entry accepts a plain object and encodes it as
+      // multipart/form-data; the fetch-based entry cannot.
+      const err = new Error('The web/edge entry only supports options.formData as a FormData instance; pass a FormData object or use the Node entry ("@zelthr/request")')
+      err.code = 'EUNSUPPORTED'
+      throw err
+    }
     if (options.formData instanceof FormData) {
       return { body: options.formData, contentType: null, replayable: true }
     }

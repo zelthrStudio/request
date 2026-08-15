@@ -62,8 +62,12 @@ function getSession (self) {
 
       let session = null
       let settled = false
-      // An explicit request timeout also bounds the connection phase.
-      const connectBudget = self.timeout || CONNECT_WALL_CLOCK_TIMEOUT
+      // An explicit request timeout also bounds the connection phase; a
+      // dedicated `http2ConnectTimeout` overrides the 30s wall-clock budget
+      // for slow handshakes without timing out the whole request.
+      const connectBudget = self.http2ConnectTimeout !== undefined
+        ? self.http2ConnectTimeout
+        : (self.timeout || CONNECT_WALL_CLOCK_TIMEOUT)
       const connectTimer = setTimeout(function () {
         if (session) {
           try {

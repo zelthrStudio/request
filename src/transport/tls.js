@@ -37,11 +37,22 @@ function fnId (fn) {
   return id
 }
 
+// Certificates are reused across requests (the same `ca`/`cert` Buffer is
+// passed to every request with the same options); hash each Buffer once
+// instead of re-hashing the full buffer on every request. A WeakMap keeps
+// the cache alive only as long as the caller keeps the Buffer.
+const bufferHashes = new WeakMap()
+
 function hashValue (value) {
   if (Buffer.isBuffer(value)) {
     // Hash the full buffer: a 32-byte truncation of a hex digest would let
     // different CAs with a shared prefix reuse an agent.
-    return 'buf:' + value.length + ':' + crypto.createHash('sha256').update(value).digest('hex')
+    let hash = bufferHashes.get(value)
+    if (hash === undefined) {
+      hash = 'buf:' + value.length + ':' + crypto.createHash('sha256').update(value).digest('hex')
+      bufferHashes.set(value, hash)
+    }
+    return hash
   }
   return 'str:' + crypto.createHash('sha256').update(String(value)).digest('hex')
 }

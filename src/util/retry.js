@@ -4,9 +4,13 @@
 
 // Built-in retry support, modeled after Got. Opt-in via `retry: true` or a
 // configuration object; never retried unless the request body is replayable.
+// Only safe (idempotent) methods are retried by default: PUT/DELETE can
+// duplicate side effects if the first attempt reached the server but the
+// response was lost. Callers that own the idempotency (e.g. an explicit
+// idempotency key on the endpoint) can opt back in via `methods`.
 const retryDefaults = {
   limit: 3,
-  methods: ['GET', 'HEAD', 'OPTIONS', 'PUT', 'DELETE'],
+  methods: ['GET', 'HEAD', 'OPTIONS'],
   statusCodes: [429, 503],
   errorCodes: ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ESOCKETTIMEDOUT', 'EPIPE'],
   maxRetryAfter: 30000,

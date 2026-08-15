@@ -44,6 +44,12 @@ function clear () {
 const reset = clear
 
 function enable () {
+  // A mock left on in production silently serves fake responses to real
+  // traffic. Tests enable mocks deliberately; anything else is a leak risk.
+  if (process.env.NODE_ENV !== 'test') {
+    // eslint-disable-next-line no-console
+    console.warn('[request] mock layer enabled outside a test environment (NODE_ENV !== "test"): responses will be served from mocks. Call request.mock.disable() before serving real traffic.')
+  }
   enabled = true
 }
 

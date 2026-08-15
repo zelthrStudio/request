@@ -1,5 +1,55 @@
 # Change Log
 
+## [1.4.0] — 2026-08-16 — audit pass 3: redirect credential leak, pool lifecycle, retry safety
+
+### Fixed
+
+- **Security (HIGH, H-1):** 307/308 cross-host redirects forwarded the
+  original host's `Cookie` and `Authorization` headers to the redirect
+  target (the credential strip only ran for other redirect statuses).
+  307/308 preserve the method and body, so they are the statuses most
+  likely to carry credentials in real API redirects. Credentials are now
+  stripped on a hostname change for every redirect status (401 excluded —
+  digest re-requests are same-host).
+- **Resource leak (HIGH, B-H4):** agents evicted from the connection-pool
+  LRU were dropped but never destroyed, so their keep-alive sockets (and
+  fds) accumulated on processes with many distinct TLS connect signatures
+  (per-tenant CA/client-cert patterns). Evicted agents are now destroyed;
+  agents with in-flight requests are left to finish and close on their own.
+- **Duplicate side effects (MEDIUM, B-M1):** retry defaults no longer
+  include `PUT`/`DELETE` (they can replay a mutation whose first attempt
+  actually succeeded server-side). Default retry methods are now
+  `GET`/`HEAD`/`OPTIONS`; opt back in via `retry: { methods: [...] }` when
+  the endpoint is idempotent.
+- **Silent behavior change (MEDIUM, B-M5):** the web/Edge entry now throws
+  `EUNSUPPORTED` for options it cannot honor (`retry`, `jar`, `proxy`,
+  `cache`, `paginate`, `mock`, `http2`, `forever`, `pool`, `agent`,
+  `agentOptions`, `progress`, `dnsCache`, `lookup`, `tunnel`, `multipart`,
+  `localAddress`, `family`, TLS options, and plain-object `formData`)
+  instead of silently ignoring them — a caller migrating from the Node
+  client can no longer get different behavior without noticing.
+- **Circuit breaker bypass (MEDIUM, B-M6):** guard-state eviction could
+  evict a host's *open* circuit when the state map exceeded its cap,
+  silently letting requests through during the cooldown window. Eviction
+  now skips open circuits (and skips half-open probes).
+- **Mock leak warning (LOW, B-L6):** `request.mock.enable()` now warns
+  when `NODE_ENV` is not `test`, so a test that forgets to disable mocks
+  cannot silently leak mocked responses into production behavior.
+- **Async schema validator (LOW, B-L7):** a validator whose
+  `parse`/`validate`/`safeParse`/call returns a Promise is rejected with a
+  loud "must be synchronous" error instead of silently handing the caller
+  a Promise as the response body.
+- **Per-request cert hashing (LOW, B-L10):** TLS `connectSignature` now
+  hashes each certificate Buffer once (WeakMap cache) instead of re-hashing
+  the full buffer on every request.
+
+### Added
+
+- **`http2ConnectTimeout` (LOW, B-L11):** dedicated wall-clock budget (ms)
+  for the HTTP/2 connection phase (TCP+TLS+ALPN). Defaults to the request
+  `timeout`, or 30 s. Useful for slow handshakes that would otherwise trip
+  the 30 s ceiling while the request itself has a longer timeout.
+
 ## [1.3.0] — 2026-08-15 — web & Edge runtime entry + framework docs
 
 ### Added

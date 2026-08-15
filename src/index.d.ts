@@ -179,6 +179,8 @@ declare namespace request {
     pool?: boolean | { maxSockets?: number }
     agent?: HttpAgent
     http2?: boolean
+    /** Wall-clock budget (ms) for the HTTP/2 connection phase (TCP+TLS+ALPN); defaults to the request `timeout` or 30 s. */
+    http2ConnectTimeout?: number
     /** RFC 7234 HTTP cache: true (shared), an HttpCache instance, or { ttl, maxEntries }. */
     cache?: boolean | HttpCache | { ttl?: number; maxEntries?: number }
     /** DNS result cache: true (shared), a custom lookup function, or { ttl, max }. */

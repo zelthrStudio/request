@@ -194,6 +194,9 @@ Matchers can be a URL substring, a `RegExp`, or a `(uri, request) => boolean`
 function. Handlers may be async and return `null` to pass through to the
 network. A per-request `mock` option does the same for a single request.
 
+`request.mock.enable()` warns when `NODE_ENV` is not `test`: mocks left on
+outside a test environment silently serve fake responses to real traffic.
+
 ## Promises
 
 Every `request(...)` call returns a `Request` stream that is also a thenable,
@@ -294,9 +297,15 @@ request({
 }, callback)
 ```
 
-Defaults: `limit: 3`, methods `GET/HEAD/OPTIONS/PUT/DELETE`, status codes
+Defaults: `limit: 3`, methods `GET/HEAD/OPTIONS`, status codes
 `429` and `503`, network error codes, exponential backoff from 1000 ms.
 A `Retry-After` response header is honored (capped by `maxRetryAfter`).
+
+`PUT`/`DELETE` are **not** retried by default: retrying a mutation whose
+first attempt actually reached the server (but whose response was lost)
+would duplicate the side effect. If the endpoint is idempotent (for
+example it accepts an idempotency key), opt back in with
+`retry: { methods: ['PUT'] }`.
 
 ## Reliability: dedupe, schema validation, circuit breaker, rate limit
 
@@ -455,6 +464,10 @@ console.log(response.body)
   and redirects, gzip, cookies, JSON bodies, forms and promises all behave
   the same as over HTTP/1.
 - Not supported together with `proxy` (an error is emitted if both are set).
+- `http2ConnectTimeout` bounds the connection phase (TCP+TLS+ALPN) in
+  milliseconds. Defaults to the request `timeout`, or 30 s for slow
+  handshakes; the request times out with `ETIMEDOUT` if the session is not
+  established within the budget.
 
 HTTP/1.1 remains the default; `http2` must be enabled per request (or baked
 into a `request.defaults({ http2: true })` wrapper).
@@ -613,10 +626,14 @@ Differences from the main package (all documented limitations):
   error is attached as `cause`).
 - `gzip`/`brotli` are no-ops — fetch advertises `accept-encoding` and
   decompresses transparently.
-- Not available: `retry`, `jar`/cookies, `proxy`, `cache`, `mock`,
-  `paginate`, `streaming`, `http2`/TLS options, `forever`/`pool`/`agent`,
-  `progress`, DNS options. Cookies are handled by the platform
-  (undici/Cloudflare), and proxies are typically rewrites in middleware.
+- Options this entry cannot honor are **rejected with `code: 'EUNSUPPORTED'`**
+  instead of being silently ignored (so a caller migrating from the Node
+  client never gets different behavior without noticing): `retry`,
+  `jar`/cookies, `proxy`, `cache`, `mock`, `paginate`, `streaming`,
+  `http2`/TLS options, `forever`/`pool`/`agent`, `progress`, DNS options,
+  and plain-object `formData` (pass a `FormData` instance instead). Cookies
+  are handled by the platform (undici/Cloudflare), and proxies are
+  typically rewrites in middleware.
 
 ## Framework integrations
 

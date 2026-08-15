@@ -26,10 +26,8 @@ const customAgents = new Map()
 
 // Cap the per-signature agent maps: a per-tenant CA/client-cert pattern or
 // per-request `pool` options would otherwise grow agents (and their
-// keep-alive sockets) without bound. Evicted agents are dropped from the map
-// but not destroyed: idle sockets close themselves via the agent's
-// free-socket timer, and destroying a busy agent would kill in-flight
-// requests.
+// keep-alive sockets) without bound. Evicted agents are destroyed so their
+// sockets (and fds) do not accumulate on a long-running process.
 const MAX_HTTPS_AGENTS = 100
 const MAX_HTTP_AGENTS = 50
 const MAX_PROXY_AGENTS = 50
@@ -39,7 +37,27 @@ function lruSet (map, key, value, max) {
   map.delete(key)
   map.set(key, value)
   while (map.size > max) {
-    map.delete(map.keys().next().value)
+    const evictedKey = map.keys().next().value
+    const evicted = map.get(evictedKey)
+    map.delete(evictedKey)
+    destroyEvictedAgent(evicted)
+  }
+}
+
+// Destroy an agent that just lost its place in the pool. Only agents with no
+// in-flight requests are destroyed: `agent.destroy()` also closes sockets
+// currently in use, which would cut off live requests. Busy agents are
+// deferred — their sockets close when the in-flight requests finish and the
+// keep-alive timer fires. Destroyed idle agents stop accepting sockets and
+// close their keep-alive sockets immediately.
+function destroyEvictedAgent (agent) {
+  if (!agent || typeof agent.destroy !== 'function') {
+    return
+  }
+  const inFlight = agent.sockets
+  const busy = inFlight && (typeof inFlight.size === 'number' ? inFlight.size > 0 : Object.keys(inFlight).length > 0)
+  if (!busy) {
+    agent.destroy()
   }
 }
 

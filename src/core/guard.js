@@ -20,10 +20,29 @@ function stateKey (self) {
   return self.uri.host
 }
 
-function evictIfNeeded (map) {
-  if (map.size > MAX_STATES) {
-    map.delete(map.keys().next().value)
+// Evict the oldest entry when a state map exceeds its cap. The circuit
+// breaker's open state must survive churn: evicting it would silently let
+// requests through a host that is mid-cooldown, bypassing the breaker.
+// Pass `isOpen` to skip such entries (the oldest non-open entry is evicted
+// instead); the rate-limit buckets have no comparable state and evict freely.
+function evictIfNeeded (map, isOpen) {
+  if (map.size <= MAX_STATES) {
+    return
   }
+  if (!isOpen) {
+    map.delete(map.keys().next().value)
+    return
+  }
+  // Find the oldest non-open entry; if every entry is open, evict the
+  // oldest open one anyway so the map stays bounded (a host that opens its
+  // circuit right after eviction simply re-arms on the next request).
+  for (const key of map.keys()) {
+    if (!isOpen(map.get(key))) {
+      map.delete(key)
+      return
+    }
+  }
+  map.delete(map.keys().next().value)
 }
 
 // --- Circuit breaker -------------------------------------------------------
@@ -95,7 +114,11 @@ function cbState (self) {
   if (!state) {
     state = { failures: 0, openedAt: 0, probing: false }
     breakers.set(key, state)
-    evictIfNeeded(breakers)
+    evictIfNeeded(breakers, function (candidate) {
+      // Never evict a circuit that is open (or mid half-open probe):
+      // its cooldown must keep blocking requests.
+      return candidate.openedAt !== 0 || candidate.probing
+    })
   }
   return state
 }
