@@ -156,15 +156,16 @@ Redirect.prototype.onResponse = function (response) {
     if (request.headers) {
       request.removeHeader('content-type')
       request.removeHeader('content-length')
-      if (request.originalHost && request.uri.hostname !== request.originalHost.split(':')[0]) {
-        // Remove authorization and cookies when changing hostnames (but not
-        // if just changing ports or protocols): the redirect target must not
-        // receive credentials scoped to the original host. Matches the
-        // behavior of curl.
-        request.removeHeader('authorization')
-        request.removeHeader('cookie')
-      }
     }
+  }
+  // Remove authorization and cookies when changing hostnames (but not if
+  // just changing ports or protocols): the redirect target must not receive
+  // credentials scoped to the original host. Matches the behavior of curl.
+  // This applies to every redirect status — including 307/308, which preserve
+  // the method and body but must still not forward credentials cross-host.
+  if (request.headers && request.originalHost && request.uri.hostname !== request.originalHost.split(':')[0]) {
+    request.removeHeader('authorization')
+    request.removeHeader('cookie')
   }
 
   // Only forward a Referer to the same hostname: leaking the previous URL

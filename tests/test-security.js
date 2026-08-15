@@ -76,6 +76,85 @@ test('H1: jar cookies for the old host are not merged into a new host', async fu
   })
 })
 
+// H1 regression (report-2.md): 307/308 preserve the method and body, so they
+// were excluded from the old credential-strip block and forwarded Cookie +
+// Authorization to a different hostname. Every redirect status must strip
+// credentials on a hostname change.
+for (const status of [307, 308]) {
+  test(`H1: ${status} cross-host redirect drops cookie and authorization`, async function (t) {
+    let cookieSeen
+    let authSeen
+    const target = await createServer(function (req, res) {
+      cookieSeen = req.headers.cookie
+      authSeen = req.headers.authorization
+      res.end('target')
+    })
+    t.after(() => closeServer(target))
+
+    const source = await createServer(function (req, res) {
+      res.writeHead(status, { location: 'http://localhost:' + target.port + '/' })
+      res.end()
+    })
+    t.after(() => closeServer(source))
+
+    await new Promise(function (resolve, reject) {
+      request.get({
+        uri: 'http://127.0.0.1:' + source.port + '/',
+        followAllRedirects: true,
+        headers: { cookie: 'sid=secret123', authorization: 'Bearer TOKEN-XYZ' }
+      }, function (err, response, body) {
+        try {
+          assert.ifError(err)
+          assert.strictEqual(body, 'target')
+          assert.strictEqual(cookieSeen, undefined, `${status} must not forward the cookie cross-host`)
+          assert.strictEqual(authSeen, undefined, `${status} must not forward authorization cross-host`)
+          resolve()
+        } catch (e) {
+          reject(e)
+        }
+      })
+    })
+  })
+
+  test(`H1: ${status} POST cross-host redirect (followAllRedirects) drops credentials`, async function (t) {
+    let cookieSeen
+    let authSeen
+    let methodSeen
+    const target = await createServer(function (req, res) {
+      cookieSeen = req.headers.cookie
+      authSeen = req.headers.authorization
+      methodSeen = req.method
+      res.end('target')
+    })
+    t.after(() => closeServer(target))
+
+    const source = await createServer(function (req, res) {
+      res.writeHead(status, { location: 'http://localhost:' + target.port + '/' })
+      res.end()
+    })
+    t.after(() => closeServer(source))
+
+    await new Promise(function (resolve, reject) {
+      request.post({
+        uri: 'http://127.0.0.1:' + source.port + '/',
+        followAllRedirects: true,
+        body: 'payload',
+        headers: { cookie: 'sid=secret123', authorization: 'Bearer TOKEN-XYZ' }
+      }, function (err, response, body) {
+        try {
+          assert.ifError(err)
+          assert.strictEqual(methodSeen, 'POST', `${status} must preserve the POST method`)
+          assert.strictEqual(cookieSeen, undefined, `${status} must not forward the cookie cross-host`)
+          assert.strictEqual(authSeen, undefined, `${status} must not forward authorization cross-host`)
+          resolve()
+        } catch (e) {
+          reject(e)
+        }
+      })
+    })
+  })
+}
+
 test('H2: paginate refuses cross-origin next URLs by default', async function (t) {
   let foreignHits = 0
   const foreign = await createServer(function (req, res) {
