@@ -1,5 +1,21 @@
 # Change Log
 
+## [Unreleased] — hardening & performance
+
+### Fixed
+
+- **Security: the cookie jar now validates the `Domain` attribute** before
+  storing a cookie. A `Set-Cookie` whose `Domain` does not domain-match the
+  request host (or is a bare single-label TLD such as `Domain=com`) is
+  rejected, so a malicious server can no longer poison the shared jar with
+  cookies scoped to another host.
+
+### Changed
+
+- Reserved-option validation (`__proto__`/`constructor` key checks) now uses a
+  cached property-name `Set` instead of re-deriving prototype names per
+  request, removing the per-request allocation in the hot path.
+
 ## [Unreleased] — security hardening
 
 ### Fixed

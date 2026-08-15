@@ -22,6 +22,18 @@ const { handleRequestResponse, handleResponseData, handleResponseEnd } = require
 const extend = helpers.extend
 const safeStringify = helpers.safeStringify
 
+// Prototype property names are computed once per process (not per request)
+// so the constructor's option-vs-prototype split is an O(1) Set lookup.
+let reservedNamesCache = null
+function getReservedNames () {
+  if (!reservedNamesCache) {
+    const names = new Set(Object.getOwnPropertyNames(Request.prototype))
+    names.add('constructor')
+    reservedNamesCache = names
+  }
+  return reservedNamesCache
+}
+
 class Request extends stream.Duplex {
   constructor (options) {
     super({ emitClose: true, allowHalfOpen: true })
@@ -41,10 +53,10 @@ class Request extends stream.Duplex {
     self._retryAttempts = 0
 
     // Extend the request instance with any non-reserved properties.
-    const reserved = Object.getOwnPropertyNames(Request.prototype).concat(['constructor'])
+    const reserved = getReservedNames()
     const nonReserved = {}
     for (const key of Object.keys(options)) {
-      if (reserved.indexOf(key) === -1) {
+      if (!reserved.has(key)) {
         nonReserved[key] = options[key]
       }
     }

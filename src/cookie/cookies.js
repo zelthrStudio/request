@@ -124,6 +124,19 @@ class CookieJar {
     if (!cookie.domain) {
       cookie.domain = uri.hostname.toLowerCase()
       cookie.hostOnly = true
+    } else {
+      // RFC 6265 §5.3: a server may only set a Domain attribute that
+      // domain-matches the request host, otherwise any server could plant
+      // cookies for unrelated hosts into the (shared/global) jar. Without a
+      // public-suffix list, single-label domains ("com", "net", ...) are
+      // also rejected unless they are the request host itself, closing the
+      // `Domain=com`-style poisoning variant.
+      const host = uri.hostname.toLowerCase()
+      const domain = cookie.domain.toLowerCase()
+      const domainMatches = host === domain || host.endsWith('.' + domain)
+      if (!domainMatches || (domain.indexOf('.') === -1 && host !== domain)) {
+        return
+      }
     }
     if (!cookie.path) {
       cookie.path = defaultPath(uri.pathname)
