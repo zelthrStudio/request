@@ -1,7 +1,7 @@
 {
   "name": "@zelthr/request",
   "description": "Simplified HTTP request client. Modern remake of the classic request package.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "keywords": [
     "http",
     "https",
