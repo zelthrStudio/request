@@ -9,6 +9,7 @@ const helpers = require('../util').helpers
 const getProxyFromURI = require('../util').proxy
 const { normalizeRetry } = require('../util').retry
 const { createDnsCache, defaultDnsCache } = require('../util').dnsCache
+const { normalizeCircuitBreaker, normalizeRateLimit } = require('./guard')
 const { HttpCache, defaultCache } = require('../cache')
 const mime = require('../body').mime
 
@@ -53,6 +54,26 @@ function initRequest (self, options) {
 
   if (self._retry === undefined) {
     self._retry = normalizeRetry(options.retry)
+  }
+
+  // Request coalescing: `dedupe: true` merges concurrent identical
+  // GET/HEAD requests onto a single network request.
+  if (self._dedupe === undefined) {
+    self._dedupe = !!options.dedupe
+  }
+
+  // Response schema validation: joi/zod/valibot-style validator or a
+  // plain function, applied after the body is parsed.
+  if (self._schema === undefined) {
+    self._schema = options.schema || null
+  }
+
+  if (self._circuitBreaker === undefined) {
+    self._circuitBreaker = normalizeCircuitBreaker(options.circuitBreaker)
+  }
+
+  if (self._rateLimit === undefined) {
+    self._rateLimit = normalizeRateLimit(options.rateLimit)
   }
 
   if (!self._hooks) {

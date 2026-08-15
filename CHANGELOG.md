@@ -1,5 +1,30 @@
 # Change Log
 
+## [1.2.0] — 2026-08-15 — reliability features: dedupe, schema, circuit breaker, rate limit
+
+### Added
+
+- **Request deduplication (`dedupe: true`):** concurrent identical GET/HEAD
+  requests to the same URL coalesce onto a single network request; waiters
+  are served a buffered copy of the response (`response.fromDedupe`). Only
+  idempotent methods coalesce, so a non-idempotent POST is never silently
+  merged. Errors and aborts on the primary propagate to every waiter.
+- **Response schema validation (`schema`):** the parsed body is validated
+  before delivery using a joi-style (`.validate`), zod-style (`.parse`, the
+  original error such as `ZodError` propagates), valibot-style
+  (`.safeParse`) validator, or a plain function. The validated/transformed
+  value replaces `response.body`; validation failures reject the request
+  (the validators stay optional peer dependencies — no runtime deps).
+- **Circuit breaker (`circuitBreaker`):** per-`host:port` state (ports never
+  share a circuit) that opens after `threshold` consecutive final failures,
+  fails subsequent requests fast with `error.code = 'CB_OPEN'` and allows a
+  single half-open probe after `cooldown`. A successful probe closes the
+  circuit; schema-validation failures and user aborts never trip it.
+- **Per-host rate limiting (`rateLimit`):** a token bucket per `host:port`
+  with `rate` (tokens/second) and burst `capacity`. Concurrent waiters queue
+  in-process without over-issuing, and an abort while waiting rejects with
+  `AbortError`.
+
 ## [1.1.2] — 2026-08-15 — security & bug audit pass 2 (report-1.md)
 
 ### Fixed

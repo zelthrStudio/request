@@ -90,6 +90,26 @@ declare namespace request {
     jitter?: boolean | number
   }
 
+  interface CircuitBreakerOptions {
+    /** Consecutive failures before the circuit opens. @default 5 */
+    threshold?: number
+    /** Cooldown in ms before a half-open probe is allowed. @default 30000 */
+    cooldown?: number
+  }
+
+  interface RateLimitOptions {
+    /** Requests per second per host. @default 10 */
+    rate?: number
+    /** Burst capacity (how many requests may start at once). @default rate */
+    capacity?: number
+  }
+
+  type SchemaValidator =
+    | ((body: any) => any)
+    | { validate (value: any): { error?: Error; value?: any } }
+    | { parse (value: any): any }
+    | { safeParse (value: any): { success: boolean; output?: any; issues?: Array<{ path?: Array<string | number>; message?: string }> } }
+
   type BeforeRequestHook = (request: Request) => any
   type AfterResponseHook = (response: Response) => any
 
@@ -172,6 +192,14 @@ declare namespace request {
     /** Mock this request: a static response spec or a function returning one (or null to pass through). */
     mock?: MockSpec | ((uri: URL, request: Request) => MockSpec | null | undefined | Promise<MockSpec | null | undefined>)
     retry?: boolean | number | RetryOptions
+    /** Coalesce concurrent identical GET/HEAD requests onto one network request. */
+    dedupe?: boolean
+    /** Validate the parsed response body (joi/zod/valibot-style validator or a function). */
+    schema?: SchemaValidator
+    /** Fail fast per host after repeated failures: true (defaults), threshold, or options. */
+    circuitBreaker?: boolean | number | CircuitBreakerOptions
+    /** Per-host request rate: true (defaults), req/sec, or { rate, capacity }. */
+    rateLimit?: boolean | number | RateLimitOptions
     hooks?: HookOptions
     paginate?: PaginationOptions
     forever?: boolean
@@ -193,6 +221,8 @@ declare namespace request {
     revalidated?: boolean
     /** True when the response came from the mocking layer. */
     isMock?: boolean
+    /** True when the response was replayed by in-flight request deduplication. */
+    fromDedupe?: boolean
     elapsedTime?: number
     timingStart?: number
     timings?: {

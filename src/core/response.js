@@ -13,6 +13,8 @@ const cookies = require('../cookie')
 const { shouldRetryStatus, retryDelay } = require('../util').retry
 const { safeRunAttempt } = require('./start')
 const { closeDisposableAgent, makeBodyLimitError } = require('../transport')
+const guard = require('./guard')
+const { validateWithSchema } = require('../util').schema
 
 // Size cap for bodies buffered in memory (callback/promise mode) when the
 // caller did not set an explicit `maxBytes`. Streamed responses are
@@ -37,6 +39,12 @@ async function handleRequestResponse (self, response) {
   response.request = self
   response.toJSON = responseToJSON
   self.response = response
+
+  // A response arrived for this host: the circuit breaker (if any) can
+  // start counting failures from a clean slate.
+  if (self._circuitBreaker) {
+    guard.cbRecordSuccess(self)
+  }
 
   // Accumulate decoded bytes for the RFC 7234 cache (only for fresh GETs).
   if (self._cache && self.method === 'GET' && !self._cacheHit) {
@@ -334,6 +342,18 @@ function handleResponseEnd (self) {
         body = JSON.parse(body)
       } catch (e) {
         self.debug('invalid JSON received', self.uri.href)
+      }
+    }
+
+    // Schema validation: zod throws, joi/valibot-style validators fail
+    // with a result object; a plain function may throw or transform.
+    if (self._schema && typeof body !== 'undefined' && body !== '') {
+      try {
+        body = validateWithSchema(self._schema, body)
+      } catch (e) {
+        self.debug('response failed schema validation', self.uri.href)
+        self.onRequestError(e)
+        return
       }
     }
 

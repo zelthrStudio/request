@@ -11,6 +11,8 @@ const transport = require('../transport')
 const { shouldRetryError, retryDelay } = require('../util').retry
 const { makeResponse } = require('./fake')
 const mockResolve = require('../mock').resolve
+const dedup = require('./dedup')
+const guard = require('./guard')
 
 // start() is called once we are ready to send the outgoing HTTP request.
 // This is usually called on the first write(), end() or on nextTick().
@@ -108,6 +110,24 @@ async function runAttempt (self) {
       }
     }
 
+    // Deduplication: coalesce onto an existing in-flight request. The
+    // primary delivers a buffered copy of its response to every waiter.
+    if (dedup.acquire(self)) {
+      return
+    }
+
+    // Circuit breaker: fail fast while the host's circuit is open.
+    if (self._circuitBreaker && guard.cbOpen(self)) {
+      const err = new Error('Circuit breaker open for ' + self.uri.host)
+      err.code = 'CB_OPEN'
+      return self.onRequestError(err)
+    }
+
+    // Rate limiting: wait for the per-host token before dispatching.
+    if (self._rateLimit) {
+      await guard.rateAcquire(self)
+    }
+
     result = await transport.dispatch(self)
   } catch (err) {
     if (self._aborted) {
@@ -137,6 +157,12 @@ function sendRequest (self) {
 function handleRequestError (self, error) {
   if (self._aborted) {
     return
+  }
+  // Trip the circuit breaker on final (post-retry) failures; the open
+  // error itself, schema-validation rejections and user aborts are not
+  // host failures.
+  if (self._circuitBreaker && error.code !== 'CB_OPEN' && !error.validation) {
+    guard.cbRecordFailure(self)
   }
   // Record the failure so a .then() attached after the error was emitted
   // (e.g. a request that fails during construction) still rejects instead

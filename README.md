@@ -108,6 +108,10 @@ request({
 | `forever` | Use keep-alive agents (`true` or `{}` for agent options). |
 | `time` | `true` to record timings on the response. |
 | `retry` | `true`, a number, or a [retry config](#retry) to retry failed requests. |
+| `dedupe` | `true` to coalesce concurrent identical GET/HEAD requests onto one network request. See [Deduplication](#reliability-dedupe-schema-validation-circuit-breaker-rate-limit). |
+| `schema` | Validate the parsed response body (joi/zod/valibot-style validator or a plain function). See [Schema validation](#reliability-dedupe-schema-validation-circuit-breaker-rate-limit). |
+| `circuitBreaker` | `true`, a threshold number, or `{ threshold, cooldown }` — fail fast per `host:port` after repeated failures. |
+| `rateLimit` | `true`, req/sec number, or `{ rate, capacity }` — per-`host:port` token bucket. |
 | `hooks` | `{ beforeRequest, afterResponse }` [hooks](#hooks). |
 | `paginate` | `{ transform, filter, ... }` options for [paginate()](#pagination). |
 | `rejectUnauthorized` | TLS: verify the server certificate, default `true`. |
@@ -291,6 +295,75 @@ request({
 Defaults: `limit: 3`, methods `GET/HEAD/OPTIONS/PUT/DELETE`, status codes
 `429` and `503`, network error codes, exponential backoff from 1000 ms.
 A `Retry-After` response header is honored (capped by `maxRetryAfter`).
+
+## Reliability: dedupe, schema validation, circuit breaker, rate limit
+
+Four opt-in features for keeping concurrent workloads under control.
+All of them are per-request options and all are implemented in-process,
+with no extra dependencies.
+
+### Deduplication
+
+`dedupe: true` coalesces concurrent identical GET/HEAD requests onto a
+single network request; every waiter receives its own copy of the
+buffered response (`response.fromDedupe === true` on the waiters). This
+is the SWR/React Query pattern for server-side callers. Only idempotent
+methods are ever coalesced, and the primary's `timeout` governs the
+shared attempt.
+
+```js
+const [a, b] = await Promise.all([
+  request.promise({ uri: 'https://api.example.com/status', dedupe: true }),
+  request.promise({ uri: 'https://api.example.com/status', dedupe: true })
+]) // one network request
+```
+
+### Schema validation
+
+`schema` validates the parsed response body before it is delivered.
+Duck-typing supports the popular validators without bundling them:
+a joi object (`.validate`), a zod schema (`.parse`, errors propagate as
+`ZodError`), a valibot schema (`.safeParse`), or a plain function. The
+validated (possibly transformed) value replaces `response.body`; a
+failed validation rejects the request.
+
+```js
+const zodSchema = z.object({ ok: z.boolean() })
+request.promise({ uri: 'https://api.example.com/check', json: true, schema: zodSchema })
+```
+
+### Circuit breaker
+
+`circuitBreaker` fails fast when a host keeps failing, instead of
+hammering a dying endpoint with retries. State is keyed per
+`host:port` — different ports never share a circuit. After
+`threshold` consecutive final failures the circuit opens; every
+request then errors with code `CB_OPEN` until the `cooldown` elapses,
+at which point a single half-open probe is allowed through. A
+successful probe closes the circuit.
+
+```js
+request({
+  uri: 'https://api.example.com/',
+  circuitBreaker: { threshold: 5, cooldown: 30000 }
+}, callback)
+```
+
+### Rate limiting
+
+`rateLimit` throttles requests per `host:port` with a token bucket:
+`capacity` tokens may be spent at once (burst), then tokens refill at
+`rate` per second. Waiters queue in-process until a token is free; an
+abort while waiting rejects with `AbortError`.
+
+```js
+request({
+  uri: 'https://api.example.com/search?q=item',
+  rateLimit: { rate: 5, capacity: 10 } // 5 req/s, burst of 10
+}, callback)
+```
+
+`rateLimit: true` defaults to 10 req/s (burst 10); a number sets both.
 
 ## Pagination
 
