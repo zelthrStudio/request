@@ -30,6 +30,9 @@ function getSession (self) {
     }
 
     const options = { connectTimeout: 10000 }
+    if (self.lookup) {
+      options.lookup = self.lookup
+    }
     if (self.uri.protocol === 'https:') {
       options.ALPNProtocols = ['h2', 'http/1.1']
       const connect = connectOptions(self)

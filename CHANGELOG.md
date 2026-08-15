@@ -1,5 +1,43 @@
 # Change Log
 
+## [Unreleased] — caching, DNS, brotli, progress, mocking & throughput
+
+### Added
+
+- **RFC 7234 HTTP cache** via the `cache` option: `cache: true` uses the
+  shared store, or pass an `HttpCache` instance / `{ ttl, maxEntries }` for a
+  dedicated one. GET responses are stored when cacheable (status, no-store,
+  Authorization rules, `Vary` honored per header variant) and served without
+  touching the network while fresh; stale entries are revalidated with
+  `If-None-Match` / `If-Modified-Since` and refreshed on a 304. Cached
+  responses expose `response.fromCache` and `response.revalidated`;
+  `request.cache` exposes the shared store with `clear()` / `size`.
+- **DNS cache** via the `dnsCache` option: `dnsCache: true` shares a
+  process-wide cache (TTL 30s, 1000 entries by default), or pass
+  `{ ttl, max }` / a custom lookup function. A `lookup` option is also passed
+  straight through to the transport.
+- **Brotli decompression** via `brotli: true` (in addition to `gzip: true`):
+  advertises `Accept-Encoding: gzip, deflate, br` and decodes `br` responses.
+- **Progress events** via `progress: true`: the request emits `progress`
+  events while the body is uploaded and the response downloaded, carrying
+  `{ phase, uploaded, uploadedTotal, uploadPercent, downloaded,
+  downloadedTotal, percent, throughput }`.
+- **Mocking layer**: global mocks via `request.mock.add(matcher, handler)`
+  (string/RegExp/function matcher, sync or async handlers returning a
+  `{ statusCode, headers, body }` spec or null to pass through), plus a
+  per-request `mock` option (static spec or function). Mocked responses
+  expose `response.isMock`.
+- **Throughput (relative)** in timings: `response.timings.downloadBytes` and
+  `response.timings.throughput` (bytes/second over the download phase) are
+  always reported with `time: true`, and `progress` events carry a live
+  throughput relative to the request start.
+
+### Changed
+
+- Response byte counters are always tracked (used by throughput timing), so
+  the overhead is a single increment per chunk when no `progress` listener
+  is attached.
+
 ## [Unreleased] — hardening & performance
 
 ### Fixed
@@ -113,8 +151,10 @@ Modern remake of the classic `request` package, published as `@zelthr/request`.
   - `src/body/` — body and query encoders: multipart forms, urlencoded
     forms, the query-string serializer/parser and the MIME lookup table.
   - `src/cookie/` — RFC 6265 cookie jar.
+  - `src/cache/` — RFC 7234 HTTP cache (`HttpCache`, shared `defaultCache`).
+  - `src/mock/` — global mocking layer (`request.mock`).
   - `src/util/` — shared utilities: object/string helpers, serialization,
-    timings, retry policy and proxy resolution.
+    timings, retry policy, proxy resolution, DNS cache and progress events.
   - Entry points stay at `src/index.js` (CommonJS), `src/index.mjs` (ESM)
     and `src/index.d.ts` / `src/index.d.mts` (types).
 - **Connection pooling**: shared keep-alive pool by default; `pool: false`

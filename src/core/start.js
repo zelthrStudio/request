@@ -9,6 +9,8 @@ const { initTimings } = require('../util').timing
 const { closeDisposableAgent } = require('../transport')
 const transport = require('../transport')
 const { shouldRetryError, retryDelay } = require('../util').retry
+const { makeResponse } = require('./fake')
+const mockResolve = require('../mock').resolve
 
 // start() is called once we are ready to send the outgoing HTTP request.
 // This is usually called on the first write(), end() or on nextTick().
@@ -39,6 +41,9 @@ function startRequest (self) {
       self.emit('error', err)
     }
   })
+  if (self._progress && self._progress.uploadedTotal === null && self.hasHeader('content-length')) {
+    self._progress.uploadedTotal = Number(self.getHeader('content-length'))
+  }
 
   self.req = self.req || {
     destroy: function () {
@@ -71,6 +76,30 @@ async function runAttempt (self) {
       }
     }
     self.emit('request', self.req)
+
+    // Mocking layer: a matching mock replaces the network response entirely.
+    const mocked = await mockResolve(self)
+    if (mocked) {
+      const response = makeResponse(self, mocked)
+      response.isMock = true
+      self.onRequestResponse(response)
+      return
+    }
+
+    // RFC 7234 cache: serve fresh entries directly, revalidate stale ones
+    // with conditional headers on the outgoing request.
+    if (self._cache) {
+      const cached = self._cache.lookup(self)
+      if (cached) {
+        if (cached.fresh) {
+          self._cacheHit = true
+          self.onRequestResponse(self._cache.serve(self, cached.entry))
+          return
+        }
+        self._cache.applyRevalidation(self, cached)
+      }
+    }
+
     result = await transport.dispatch(self)
   } catch (err) {
     if (self._aborted) {

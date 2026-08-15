@@ -25,3 +25,4 @@ export { del as delete }
 
 export type { CoreOptions, RequestCallback, Response }
 export type { RetryOptions, HookOptions, PaginationOptions, BeforeRequestHook, AfterResponseHook, RequestFunction, Defaults, Headers, Static } from './index.js'
+export type { HttpCache, MockApi, MockSpec, MockMatcher, MockHandler, ProgressEvent, DnsLookup } from './index.js'

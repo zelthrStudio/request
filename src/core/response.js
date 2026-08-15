@@ -8,6 +8,7 @@ const stream = require('stream')
 
 const { responseToJSON } = require('../util').serialization
 const { finalizeTimings } = require('../util').timing
+const { emitProgress } = require('../util').progress
 const cookies = require('../cookie')
 const { shouldRetryStatus, retryDelay } = require('../util').retry
 const { runAttempt } = require('./start')
@@ -31,6 +32,18 @@ async function handleRequestResponse (self, response) {
   response.request = self
   response.toJSON = responseToJSON
   self.response = response
+
+  // Accumulate decoded bytes for the RFC 7234 cache (only for fresh GETs).
+  if (self._cache && self.method === 'GET' && !self._cacheHit) {
+    self._cacheChunks = []
+  }
+
+  if (self._progress && self._progress.total === null) {
+    const len = response.headers['content-length']
+    if (len !== undefined) {
+      self._progress.total = Number(len)
+    }
+  }
 
   self.originalHost = self.uri.host
 
@@ -71,6 +84,25 @@ async function handleRequestResponse (self, response) {
     return setTimeout(function () {
       runAttempt(self)
     }, delay)
+  }
+
+  // A 304 Not Modified revalidates the stored entry: refresh it and serve
+  // the cached body in place of the empty 304.
+  if (self._cache && self.method === 'GET' && response.statusCode === 304) {
+    const entry = self._cache.refresh(self, response)
+    if (entry) {
+      response.on('error', function () {})
+      response.destroy()
+      response = self._cache.serve(self, entry)
+      response.revalidated = true
+      self.response = response
+      if (self._progress && self._progress.total === null) {
+        const len = response.headers['content-length']
+        if (len !== undefined) {
+          self._progress.total = Number(len)
+        }
+      }
+    }
   }
 
   // afterResponse hooks may inspect (or replace) the response. Redirects
@@ -124,6 +156,9 @@ async function handleRequestResponse (self, response) {
       response.pipe(responseContent)
     } else if (contentEncoding === 'deflate') {
       responseContent = zlib.createInflate(zlibOptions)
+      response.pipe(responseContent)
+    } else if (contentEncoding === 'br' && self.brotli) {
+      responseContent = zlib.createBrotliDecompress(zlibOptions)
       response.pipe(responseContent)
     } else {
       // Since previous versions didn't check for Content-Encoding header,
@@ -196,6 +231,15 @@ function adoptReplacement (self, oldResponse, replacement) {
 
 function handleResponseData (self, chunk) {
   self._destdata = true
+  if (self._progress) {
+    self._progress.received += chunk.length
+    if (self.progress) {
+      emitProgress(self, 'download')
+    }
+  }
+  if (self._cacheChunks) {
+    self._cacheChunks.push(chunk)
+  }
   if (self._collect) {
     const next = (self._collectedBytes || 0) + chunk.length
     if (self.maxBytes && next > self.maxBytes) {
@@ -238,6 +282,11 @@ function handleResponseEnd (self) {
   if (self._aborted) {
     self.debug('aborted', self.uri.href)
     return
+  }
+
+  if (self._cache && self._cacheChunks) {
+    self._cache.store(self, self.response, Buffer.concat(self._cacheChunks))
+    self._cacheChunks = null
   }
 
   if (self._collect) {

@@ -40,6 +40,10 @@ function buildOptions (self, extraHeaders) {
     options.localAddress = self.localAddress
   }
 
+  if (self.lookup) {
+    options.lookup = self.lookup
+  }
+
   if (uri.protocol === 'https:') {
     const keys = ['ca', 'cert', 'key', 'pfx', 'passphrase', 'ciphers', 'secureProtocol', 'secureOptions', 'rejectUnauthorized', 'checkServerIdentity']
     for (const key of keys) {

@@ -8,6 +8,8 @@ const stream = require('stream')
 const helpers = require('../util').helpers
 const getProxyFromURI = require('../util').proxy
 const { normalizeRetry } = require('../util').retry
+const { createDnsCache, defaultDnsCache } = require('../util').dnsCache
+const { HttpCache, defaultCache } = require('../cache')
 const mime = require('../body').mime
 
 const copy = helpers.copy
@@ -238,7 +240,43 @@ function initRequest (self, options) {
   }
 
   if (self.gzip && !self.hasHeader('accept-encoding')) {
-    self.setHeader('accept-encoding', 'gzip, deflate')
+    // `brotli: true` additionally advertises and decodes Brotli responses.
+    self.setHeader('accept-encoding', self.brotli ? 'gzip, deflate, br' : 'gzip, deflate')
+  }
+
+  // DNS cache / custom lookup: a `lookup` function handed to the transport,
+  // so DNS results are resolved once per TTL instead of per request.
+  if (!self.lookup) {
+    if (options.dnsCache === true) {
+      self.lookup = defaultDnsCache
+    } else if (typeof options.dnsCache === 'function') {
+      self.lookup = options.dnsCache
+    } else if (options.dnsCache) {
+      self.lookup = createDnsCache(options.dnsCache)
+    } else if (typeof options.lookup === 'function') {
+      self.lookup = options.lookup
+    }
+  }
+
+  // RFC 7234 HTTP cache: `cache: true` uses the shared store, an HttpCache
+  // instance or `{ ttl, maxEntries }` creates a dedicated one.
+  if (!self._cache && options.cache) {
+    if (options.cache === true) {
+      self._cache = defaultCache
+    } else if (options.cache instanceof HttpCache) {
+      self._cache = options.cache
+    } else {
+      self._cache = new HttpCache(options.cache)
+    }
+  }
+
+  // Byte counters for throughput timing and progress events. The counters
+  // are always tracked; events are only emitted when `progress` is set.
+  if (!self._progress) {
+    self._progress = { received: 0, total: null, uploaded: 0, uploadedTotal: null, start: performance.now() }
+    if (options.progress) {
+      self.progress = true
+    }
   }
 
   if (self.uri.username && !self.hasHeader('authorization')) {

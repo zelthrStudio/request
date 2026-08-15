@@ -44,6 +44,10 @@ declare namespace request {
     delete: RequestFunction
     cookie: (str: string) => Cookie
     jar: (store?: any) => CookieJar
+    /** Shared RFC 7234 cache used by `cache: true`. */
+    cache: HttpCache
+    /** Global mocking layer. */
+    mock: MockApi
     defaults: (options: CoreOptions, requester?: RequestFunction) => Defaults
     forever: (agentOptions?: Record<string, any>, optionsArg?: CoreOptions) => Defaults
     promise: (uri: string | URL | CoreOptions, options?: CoreOptions) => Promise<Response>
@@ -148,6 +152,18 @@ declare namespace request {
     pool?: boolean | { maxSockets?: number }
     agent?: HttpAgent
     http2?: boolean
+    /** RFC 7234 HTTP cache: true (shared), an HttpCache instance, or { ttl, maxEntries }. */
+    cache?: boolean | HttpCache | { ttl?: number; maxEntries?: number }
+    /** DNS result cache: true (shared), a custom lookup function, or { ttl, max }. */
+    dnsCache?: boolean | DnsLookup | { ttl?: number; max?: number }
+    /** Custom DNS lookup function passed to the transport (net.connect compatible). */
+    lookup?: DnsLookup
+    /** Additionally accept and decode Brotli (br) responses when gzip is enabled. */
+    brotli?: boolean
+    /** Emit `progress` events while uploading and downloading. */
+    progress?: boolean
+    /** Mock this request: a static response spec or a function returning one (or null to pass through). */
+    mock?: MockSpec | ((uri: URL, request: Request) => MockSpec | null | undefined | Promise<MockSpec | null | undefined>)
     retry?: boolean | number | RetryOptions
     hooks?: HookOptions
     paginate?: PaginationOptions
@@ -164,6 +180,12 @@ declare namespace request {
     body: any
     request: Request
     toJSON (): any
+    /** True when the response was served from the RFC 7234 cache. */
+    fromCache?: boolean
+    /** True when the cached entry was refreshed by a 304 revalidation. */
+    revalidated?: boolean
+    /** True when the response came from the mocking layer. */
+    isMock?: boolean
     elapsedTime?: number
     timingStart?: number
     timings?: {
@@ -173,8 +195,58 @@ declare namespace request {
       firstByte: number
       download: number
       total: number
+      /** Bytes received during the download phase. */
+      downloadBytes: number
+      /** Download rate in bytes/second, relative to the download phase. */
+      throughput: number
     }
     timingPhases?: Response['timings']
+  }
+
+  interface ProgressEvent {
+    /** 'upload' or 'download'. */
+    phase: 'upload' | 'download'
+    uploaded: number
+    uploadedTotal: number | null
+    /** 0-100, null when the upload size is unknown. */
+    uploadPercent: number
+    downloaded: number
+    downloadedTotal: number | null
+    /** 0-100, null when the response size is unknown. */
+    percent: number
+    /** Download rate in bytes/second relative to the request start. */
+    throughput: number
+  }
+
+  type DnsLookup = (hostname: string, options: { family?: number; all?: boolean }, callback: (err: Error | null, address: string | Array<{ address: string; family: number }>, family?: number) => void) => void
+
+  interface HttpCache {
+    /** Fallback freshness lifetime in ms when the response has no explicit lifetime. */
+    ttl: number
+    /** Maximum number of stored entries. */
+    maxEntries: number
+    clear (): void
+    /** Number of stored entries. */
+    readonly size: number
+  }
+
+  interface MockSpec {
+    statusCode?: number
+    headers?: Headers
+    body?: string | Buffer | NodeJS.ReadableStream | ReadableStream
+    httpVersion?: string
+  }
+
+  type MockMatcher = string | RegExp | ((uri: URL, request: Request) => boolean)
+  type MockHandler = (uri: URL, request: Request) => MockSpec | null | undefined | Promise<MockSpec | null | undefined>
+
+  interface MockApi {
+    /** Register a global mock; matching requests are served without the network. */
+    add (matcher: MockMatcher, handler: MockHandler): void
+    /** Remove all global mocks. */
+    clear (): void
+    enable (): void
+    disable (): void
   }
 
   interface Request extends Duplex, PromiseLike<Response> {
@@ -212,6 +284,8 @@ declare namespace request {
     finally (onfinally?: (() => void) | null): Promise<Response>
 
     on (event: string, listener: (...args: any[]) => void): this
+    /** Fired while the body is uploaded or the response downloaded. */
+    on (event: 'progress', listener: (progress: ProgressEvent) => void): this
   }
 
   type RequestCallback = (error: Error | null, response?: Response, body?: any) => void

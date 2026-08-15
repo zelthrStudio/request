@@ -83,6 +83,11 @@ request.cookie = function (str) {
   return cookies.parse(str)
 }
 
+// Shared RFC 7234 cache used by `cache: true`, and the global mocking layer
+// used by request.mock.add().
+request.cache = require('./cache').defaultCache
+request.mock = require('./mock')
+
 // Promise interface: the Request is a thenable, but the explicit promise()
 // helper reads better and guarantees the response body is collected.
 request.promise = function (uri, options) {

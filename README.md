@@ -93,6 +93,12 @@ request({
 | `followAllRedirects` | Follow non-GET redirects too, default `false`. |
 | `maxRedirects` | Maximum number of redirects, default `10`. |
 | `gzip` | `true` to request and transparently decode gzip/deflate responses. |
+| `brotli` | `true` (with `gzip`) to also advertise and decode Brotli (`br`) responses. |
+| `cache` | RFC 7234 HTTP cache: `true` (shared store), an `HttpCache` instance, or `{ ttl, maxEntries }`. See [Caching](#caching). |
+| `dnsCache` | DNS result cache: `true` (shared), `{ ttl, max }`, or a custom `lookup` function. |
+| `lookup` | Custom DNS lookup function passed to the transport. |
+| `progress` | `true` to emit `progress` events while uploading/downloading. |
+| `mock` | Mock this request: a `{ statusCode, headers, body }` spec or a function returning one (or `null` to pass through). |
 | `timeout` | Timeout in milliseconds (headers + body idle). |
 | `jar` | Cookie jar (from `request.jar()`) to persist cookies across requests. |
 | `proxy` | Proxy URL; also read from `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` env vars. |
@@ -137,6 +143,50 @@ const client = request.defaults({
 
 client('/users', callback)
 ```
+
+## Caching
+
+The `cache` option enables an RFC 7234 HTTP cache (in-process, in-memory).
+GET responses are stored when cacheable and served without touching the
+network while fresh; stale entries are revalidated with `If-None-Match` /
+`If-Modified-Since` and refreshed on a `304`:
+
+```js
+// Shared store (usable across requests, even without `cache: true`):
+const response = await request.promise({ uri: url, cache: true })
+response.fromCache    // true when served from the cache
+response.revalidated  // true when refreshed by a 304
+
+request.cache.clear() // empty the shared store
+```
+
+`cache: true` uses the shared store exposed as `request.cache`; pass
+`{ ttl, maxEntries }` or your own `HttpCache` instance for a dedicated
+store. `Vary` headers are honored, and responses with `no-store`,
+Authorization requests without `public`, or non-GET methods are never
+stored.
+
+## Mocking
+
+The mocking layer intercepts requests before they hit the network:
+
+```js
+request.mock.add('/users', (uri, req) => ({
+  statusCode: 200,
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify([{ id: 1 }])
+}))
+
+const response = await request.promise('http://api.example.com/users')
+response.isMock // true
+
+request.mock.clear()   // remove all mocks
+request.mock.disable() // bypass mocks until enable()
+```
+
+Matchers can be a URL substring, a `RegExp`, or a `(uri, request) => boolean`
+function. Handlers may be async and return `null` to pass through to the
+network. A per-request `mock` option does the same for a single request.
 
 ## Promises
 
@@ -494,6 +544,8 @@ importers.
 - `request.cookie(str)` — parse a cookie string.
 - `request.forever([agentOptions])` — wrapper using keep-alive agents.
 - `request.closePool()` — close all pooled connections.
+- `request.cache` — the shared RFC 7234 HTTP cache (`clear()`, `size`).
+- `request.mock` — the global mocking layer (`add`, `clear`, `enable`, `disable`).
 
 ## Running the tests
 
