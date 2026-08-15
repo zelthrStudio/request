@@ -107,8 +107,10 @@ Redirect.prototype.onResponse = function (response) {
 
   self.redirects.push({ statusCode: response.statusCode, redirectUri: redirectTo })
 
+  // 308 (like 307) must preserve the original method and body; every other
+  // redirect coerces POST -> GET unless followOriginalHttpMethod is set.
   if (self.followAllRedirects && request.method !== 'HEAD' &&
-    response.statusCode !== 401 && response.statusCode !== 307) {
+    response.statusCode !== 401 && response.statusCode !== 307 && response.statusCode !== 308) {
     request.method = self.followOriginalHttpMethod ? request.method : 'GET'
   }
 
@@ -118,7 +120,7 @@ Redirect.prototype.onResponse = function (response) {
   delete request._bodyStream
   delete request._hasWrites
   delete request._retryAttempts
-  if (response.statusCode !== 401 && response.statusCode !== 307) {
+  if (response.statusCode !== 401 && response.statusCode !== 307 && response.statusCode !== 308) {
     // Remove parameters from the previous response, unless this is a re-request
     // for a server that requires digest authentication.
     delete request.body
@@ -127,9 +129,12 @@ Redirect.prototype.onResponse = function (response) {
       request.removeHeader('content-type')
       request.removeHeader('content-length')
       if (request.originalHost && request.uri.hostname !== request.originalHost.split(':')[0]) {
-        // Remove authorization if changing hostnames (but not if just
-        // changing ports or protocols). Matches the behavior of curl.
+        // Remove authorization and cookies when changing hostnames (but not
+        // if just changing ports or protocols): the redirect target must not
+        // receive credentials scoped to the original host. Matches the
+        // behavior of curl.
         request.removeHeader('authorization')
+        request.removeHeader('cookie')
       }
     }
   }

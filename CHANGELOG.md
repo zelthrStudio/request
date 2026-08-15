@@ -1,5 +1,98 @@
 # Change Log
 
+## [1.1.1] — 2026-08-15 — security & bug-fix audit (report.md)
+
+### Fixed
+
+- **Security (HIGH): cookies are no longer forwarded across hostnames on
+  redirect.** A `Cookie` header set for the original host is removed when the
+  redirect target changes hostname, and `jar()` only merges the pre-redirect
+  cookie header back when the target keeps the same hostname — so an open
+  redirect can no longer harvest cookies scoped to the source host.
+- **Security (HIGH): `paginate()` refuses cross-origin `next` URLs by
+  default.** A malicious/compromised API can no longer point pagination at an
+  attacker (or internal) host and receive the original request's
+  Authorization/cookies/API keys. `paginate.allowCrossOrigin: true` opts back
+  in. `countLimit: 0` / `requestLimit: 0` now genuinely disable the caps
+  instead of silently becoming 1000/100.
+- **Security: Set-Cookie parsing no longer splits on `', '`.** Response
+  cookies are taken from `rawHeaders` (http/1.x) or the header array (http/2);
+  the joined-string fallback only splits on a `, ` that is followed by a
+  cookie name. A cookie with `Expires=Wed, 21 Oct 2026 ...` keeps its expiry
+  and the garbage `21 Oct 2026 ... GMT=` cookie is no longer stored.
+- **Security: collected bodies now have a default size cap.** When the body is
+  buffered in memory (callback/promise mode) the default limit is 100 MB,
+  replaceable with `maxBytes` (the option is now actually wired up). Stream
+  mode is unaffected unless the caller opts in.
+- **Security: serialization strips URL userinfo.** `request.toJSON()` no
+  longer emits `user:pass@` in the URI, and `response.toJSON()` redacts
+  `set-cookie` like the other sensitive headers.
+- **Security: malformed percent-encoding in URI/proxy credentials no longer
+  throws synchronously.** `request('http://%zz:pass@host/')` now emits an
+  error instead of crashing the caller with a `URIError` from the
+  constructor; a bad proxy credential is skipped rather than thrown.
+- **Security: `Domain` cookies for two-label public suffixes are rejected.**
+  `evil.co.uk` can no longer set `Domain=co.uk` (or `com.au`, `co.jp`, `co.th`,
+  `com.br`, ...) into the jar — the PSL table now covers the common
+  two-label suffixes.
+- **Security: multipart/form-data header injection is blocked.** Quotes and
+  CR/LF are stripped from `name`/`filename`/`content-type` in `formData` and
+  from multipart part option keys/values, so a hostile filename can no longer
+  smuggle extra headers into the request body.
+- **Security: digest `realm`/`nonce`/`opaque` values are sanitized.** CR/LF
+  and quotes are stripped from server-controlled challenge values before
+  building the `Authorization` header.
+- **`qs.parse` no longer corrupts bracket notation.** `a[0]=1&a[1]=2` and
+  `a[]=1&a[]=2` keep all values, `a[0]=1&a[x]=2` converts to an object
+  preserving the index, bare `=value` is skipped instead of throwing, and
+  `append` uses `hasOwnProperty` so `a[toString]=1` cannot clobber inherited
+  methods.
+- **Multipart with a stream part no longer crashes.** The combined stream
+  terminates itself after the last part; the eager `end()` that produced
+  `ERR_STREAM_WRITE_AFTER_END` is gone.
+- **`max-age=abc` in the cache no longer means "never stale".** Malformed
+  directives fall back to Expires/last-modified heuristics and the cache TTL,
+  and a 304 revalidation no longer overwrites the stored `content-length`
+  with the (usually 0) 304 header.
+- **`then()` after an error rejects instead of hanging.** Every error path
+  now records `_errored`/`_error`; a promise attached after the failure (e.g.
+  an `await`-only caller) rejects immediately.
+- **308 redirects preserve the method and body** (like 307), so POST data is
+  no longer dropped on permanent redirects.
+- **`pool: { maxSockets }` / `agentOptions` / `forever: {...}` are honored**
+  through a dedicated cached agent per settings object, and `family` is passed
+  to the transport — previously typed in the d.ts but silently ignored.
+- **`NO_PROXY` now requires a full-label match.** `oogle.com` no longer
+  bypasses the proxy for `google.com`, and empty zones no longer match
+  everything.
+- **HTTP/2 session pooling is race-free**: the in-flight connect promise is
+  stored in the session map so concurrent first requests to a fresh origin
+  share one session.
+- **Mock matchers with `/g` (or `/y`) regexes are stateless** — `lastIndex`
+  is reset before each `test()`.
+- **Digest auth `nc` increments per nonce** instead of always sending
+  `00000001`.
+- **`connectSignature` hashes the full CA/cert buffers (sha256)** and gives
+  function options stable ids, so two different CAs sharing a 32-byte prefix
+  (or two `checkServerIdentity` functions with the same arity) can no longer
+  collide in the HTTPS agent pool.
+- **`extend()`/`copy()` skip `__proto__`/`constructor`/`prototype` keys**, so
+  options parsed from untrusted JSON can no longer mutate the target's
+  prototype.
+- **MIME table expanded**: `.yaml/.yml`, `.heic/.heif`, `.apng`, `.m4a`,
+  `.flac`, `.aac`, `.mkv`, `.mov`, `.ts`, `.map`, and `.js/.mjs` now resolve
+  to `text/javascript`.
+
+### Tests
+
+- New `tests/test-security.js` (26 tests) covering every audit finding
+  (redirect cookie stripping, cross-origin pagination, Set-Cookie expiry,
+  maxBytes, serialization redaction, bad percent-encoding, post-error
+  promises, public-suffix cookies, multipart/digest header injection, stream
+  multipart parts, qs brackets, cache max-age + 304 content-length, pool
+  options, NO_PROXY labels, stateful mocks, MIME table, digest nc, and
+  prototype-pollution guards). Full suite: 155 tests passing.
+
 ## [Unreleased] — caching, DNS, brotli, progress, mocking & throughput
 
 ### Added

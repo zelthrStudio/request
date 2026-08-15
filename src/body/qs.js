@@ -78,7 +78,10 @@ function parse (str, options) {
     if (key === '') {
       return
     }
-    if (target[key] === undefined) {
+    // hasOwnProperty (not a truthiness check): an inherited property such
+    // as `toString` must not be treated as an existing value, which would
+    // corrupt parsed output into a [function, value] pair.
+    if (!Object.prototype.hasOwnProperty.call(target, key)) {
       target[key] = value
     } else if (Array.isArray(target[key])) {
       target[key].push(value)
@@ -108,8 +111,21 @@ function parse (str, options) {
         k = k.slice(0, -1)
       }
       const nextKey = keys[i + 1].replace(/\]/g, '')
-      if (target[k] === undefined || typeof target[k] !== 'object' || Array.isArray(target[k])) {
+      // Only allocate when nothing is there yet: re-wrapping an existing
+      // array would wipe values already parsed by earlier pairs
+      // (a[0]=1&a[1]=2 must yield ['1','2'], not ['2']).
+      if (target[k] === undefined) {
         target[k] = (nextKey === '' || /^\d+$/.test(nextKey)) ? [] : {}
+      } else if (typeof target[k] !== 'object') {
+        target[k] = (nextKey === '' || /^\d+$/.test(nextKey)) ? [target[k]] : {}
+      } else if (Array.isArray(target[k]) && nextKey !== '' && !/^\d+$/.test(nextKey)) {
+        // a[0]=1&a[x]=2 -> { '0': '1', x: '2' }: keep the numeric entries
+        // while switching to an object for the non-index key.
+        const obj = {}
+        target[k].forEach(function (item, index) {
+          obj[index] = item
+        })
+        target[k] = obj
       }
       target = target[k]
     }
@@ -118,7 +134,11 @@ function parse (str, options) {
       last = last.slice(0, -1)
     }
     if (last === '') {
-      target.push(value)
+      // Root-level empty key ('=value'): nothing sensible to attach it to,
+      // so skip it instead of crashing on result.push().
+      if (Array.isArray(target)) {
+        target.push(value)
+      }
     } else {
       append(target, last, value)
     }

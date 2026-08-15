@@ -130,6 +130,11 @@ function handleRequestError (self, error) {
   if (self._aborted) {
     return
   }
+  // Record the failure so a .then() attached after the error was emitted
+  // (e.g. a request that fails during construction) still rejects instead
+  // of hanging forever.
+  self._error = error
+  self._errored = true
   self.clearTimeout()
   closeDisposableAgent(self, true)
   self.emit('error', error)

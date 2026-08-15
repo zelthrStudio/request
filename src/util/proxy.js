@@ -4,8 +4,9 @@
 // (Copyright 2010-2012 Mikeal Rogers, Apache License 2.0).
 
 function formatHostname (hostname) {
-  // Canonicalize the hostname, so that 'oogle.com' won't match 'google.com'.
-  return hostname.replace(/^\.*/, '.').toLowerCase()
+  // Strip leading dots and lowercase: matching is done on full labels, so
+  // that 'oogle.com' can never match 'google.com'.
+  return hostname.replace(/^\.*/, '').toLowerCase()
 }
 
 function parseNoProxyZone (zone) {
@@ -26,10 +27,13 @@ function uriInNoProxy (uri, noProxy) {
 
   // Iterate through the noProxyList until it finds a match.
   return noProxyList.map(parseNoProxyZone).some(function (noProxyZone) {
-    const isMatchedAt = hostname.indexOf(noProxyZone.hostname)
+    // A zone must match an entire label sequence: equal hostname, or the
+    // hostname ending in '.' + zone (a suffix check, not a substring one,
+    // so 'oogle.com' does not match 'google.com').
+    const zoneHost = noProxyZone.hostname
     const hostnameMatched = (
-      isMatchedAt > -1 &&
-      (isMatchedAt === hostname.length - noProxyZone.hostname.length)
+      zoneHost !== '' &&
+      (hostname === zoneHost || hostname.endsWith('.' + zoneHost))
     )
 
     if (noProxyZone.hasPort) {

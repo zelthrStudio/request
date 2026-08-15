@@ -9,6 +9,13 @@ const helpers = require('../util').helpers
 
 const isstream = helpers.isstream
 
+// Strip header-injection characters from multipart preamble headers: a
+// part's option keys/values are user-controlled and must not smuggle
+// CR/LF-separated fake headers (or stray quotes) into the request body.
+function sanitizeHeaderValue (value) {
+  return String(value).replace(/[\r\n"]/g, '')
+}
+
 // Combine an array of strings, buffers and streams into a single stream.
 function combinedStream (parts) {
   const out = new stream.PassThrough()
@@ -54,7 +61,7 @@ Multipart.prototype.isChunked = function (options) {
   const parts = options.data || options
 
   if (!parts.forEach) {
-    self.request.emit('error', new Error('Argument error, options.multipart.'))
+    self.request.onRequestError(new Error('Argument error, options.multipart.'))
   }
 
   if (options.chunked !== undefined) {
@@ -68,7 +75,7 @@ Multipart.prototype.isChunked = function (options) {
   if (!chunked) {
     parts.forEach(function (part) {
       if (typeof part.body === 'undefined') {
-        self.request.emit('error', new Error('Body attribute missing in multipart.'))
+        self.request.onRequestError(new Error('Body attribute missing in multipart.'))
       }
       if (isstream(part.body)) {
         chunked = true
@@ -120,7 +127,7 @@ Multipart.prototype.build = function (parts, chunked) {
       if (key === 'body') {
         continue
       }
-      preamble += key + ': ' + part[key] + '\r\n'
+      preamble += sanitizeHeaderValue(key) + ': ' + sanitizeHeaderValue(part[key]) + '\r\n'
     }
     preamble += '\r\n'
     add(preamble)
@@ -146,9 +153,10 @@ Multipart.prototype.onRequest = function (options) {
   self.chunked = chunked
   self.body = self.build(parts, chunked)
 
-  if (chunked) {
-    self.body.end()
-  }
+  // NOTE: never end() the combined stream here. It terminates on its own
+  // once every part has been consumed; ending it eagerly while a stream
+  // part is still pending would emit 'write after end' and abort the
+  // request mid-body.
 }
 
 exports.Multipart = Multipart

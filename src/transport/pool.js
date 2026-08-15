@@ -20,6 +20,26 @@ const { closeSessions } = require('./http2')
 let defaultAgent = new http.Agent({ keepAlive: true, keepAliveMsecs: 1000 })
 const httpsAgents = new Map()
 const proxyAgents = new Map()
+// Agents created from `pool: {...}`, `agentOptions` and `forever: {...}`.
+const customAgents = new Map()
+
+// Explicit `pool`/`agentOptions`/`forever` settings (maxSockets, timeouts,
+// scheduling, ...) previously documented but silently ignored. Honor them
+// through a dedicated agent, cached per unique settings object.
+function customPoolOptions (self) {
+  const options = {}
+  const sources = [self.pool, self.agentOptions, self.forever]
+  for (const source of sources) {
+    if (source && typeof source === 'object' && !(source instanceof http.Agent) && !(source instanceof https.Agent)) {
+      for (const key of Object.keys(source)) {
+        if (options[key] === undefined) {
+          options[key] = source[key]
+        }
+      }
+    }
+  }
+  return options
+}
 
 function getAgent (self) {
   // 1. An explicit agent wins.
@@ -39,7 +59,21 @@ function getAgent (self) {
   const connect = connectOptions(self)
   const signature = connectSignature(self, connect)
 
-  // 3. HTTP through a proxy: pool the connection to the proxy itself.
+  // 3. Explicit pool settings (maxSockets, agentOptions, forever): a
+  // dedicated agent per unique settings object.
+  const poolOptions = customPoolOptions(self)
+  if (Object.keys(poolOptions).length > 0) {
+    const key = JSON.stringify(poolOptions)
+    let agent = customAgents.get(key)
+    if (!agent) {
+      const Agent = isHttps ? https.Agent : http.Agent
+      agent = new Agent(Object.assign({ keepAlive: true, keepAliveMsecs: 1000 }, poolOptions))
+      customAgents.set(key, agent)
+    }
+    return agent
+  }
+
+  // 4. HTTP through a proxy: pool the connection to the proxy itself.
   if (self.proxy && !isHttps) {
     const key = self.proxy.href
     let agent = proxyAgents.get(key)
@@ -50,12 +84,12 @@ function getAgent (self) {
     return agent
   }
 
-  // 4. Plain http: the shared keep-alive agent.
+  // 5. Plain http: the shared keep-alive agent.
   if (!isHttps) {
     return defaultAgent
   }
 
-  // 5. https: an agent per TLS signature ('' for default TLS).
+  // 6. https: an agent per TLS signature ('' for default TLS).
   let agent = httpsAgents.get(signature)
   if (!agent) {
     const options = { keepAlive: true, keepAliveMsecs: 1000 }
@@ -87,8 +121,12 @@ function closePool () {
   for (const agent of proxyAgents.values()) {
     agent.destroy()
   }
+  for (const agent of customAgents.values()) {
+    agent.destroy()
+  }
   httpsAgents.clear()
   proxyAgents.clear()
+  customAgents.clear()
   closeSessions()
   defaultAgent = new http.Agent({ keepAlive: true, keepAliveMsecs: 1000 })
 }

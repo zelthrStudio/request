@@ -173,6 +173,11 @@ class HttpCache {
         if (STRIPPED_HEADERS.indexOf(name.toLowerCase()) !== -1) {
           continue
         }
+        // A 304 response carries its own content-length (usually 0); the
+        // stored entry's body length is authoritative and must win.
+        if (name.toLowerCase() === 'content-length') {
+          continue
+        }
         entry.headers[name] = response.headers[name]
       }
       return entry
@@ -199,7 +204,12 @@ class HttpCache {
     const cc = entry.cacheControl
     let lifetime = null
     if (cc['max-age'] !== undefined && cc['max-age'] !== true) {
-      lifetime = Number(cc['max-age']) * 1000
+      // A malformed max-age (e.g. "abc") must not produce NaN, which would
+      // make every entry "stale" forever; fall back to the heuristics.
+      const seconds = Number(cc['max-age'])
+      if (Number.isFinite(seconds) && seconds >= 0) {
+        lifetime = seconds * 1000
+      }
     } else {
       const date = parseDate(entry.headers.date)
       const expires = parseDate(entry.headers.expires)

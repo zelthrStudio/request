@@ -19,6 +19,9 @@ function matches (matcher, self) {
     return !!matcher(self.uri, self)
   }
   if (matcher instanceof RegExp) {
+    // A /g (or /y) regex keeps its lastIndex between test() calls and
+    // alternates matches; reset it so matching is stateless.
+    matcher.lastIndex = 0
     return matcher.test(self.uri.href)
   }
   if (typeof matcher === 'string') {

@@ -5,6 +5,8 @@
 // TLS/socket options shared between the connection pool (agents keyed by
 // these) and the HTTP/2 session pool.
 
+const crypto = require('crypto')
+
 const connectKeys = ['ca', 'rejectUnauthorized', 'cert', 'key', 'pfx', 'passphrase', 'ciphers', 'secureProtocol', 'secureOptions', 'checkServerIdentity', 'localAddress', 'family']
 
 function connectOptions (self) {
@@ -15,6 +17,20 @@ function connectOptions (self) {
     }
   }
   return options
+}
+
+// Stable ids for function-valued options (checkServerIdentity): two distinct
+// functions with the same arity must not collapse to the same pool key.
+const fnIds = new WeakMap()
+let nextFnId = 0
+
+function hashValue (value) {
+  if (Buffer.isBuffer(value)) {
+    // Hash the full buffer: a 32-byte truncation of a hex digest would let
+    // different CAs with a shared prefix reuse an agent.
+    return 'buf:' + value.length + ':' + crypto.createHash('sha256').update(value).digest('hex')
+  }
+  return 'str:' + crypto.createHash('sha256').update(String(value)).digest('hex')
 }
 
 // A stable string that identifies a unique set of connect options, so pools
@@ -29,11 +45,16 @@ function connectSignature (self, connect) {
   for (const key of keys) {
     let value = connect[key]
     if (typeof value === 'function') {
-      value = 'fn:' + value.length
-    } else if (Buffer.isBuffer(value)) {
-      value = 'buf:' + value.length + ':' + value.toString('hex', 0, 32)
+      let id = fnIds.get(value)
+      if (id === undefined) {
+        id = ++nextFnId
+        fnIds.set(value, id)
+      }
+      value = 'fn:' + id
+    } else if (Array.isArray(value)) {
+      value = 'arr:[' + value.map(hashValue).join(',') + ']'
     } else {
-      value = String(value)
+      value = hashValue(value)
     }
     parts.push(key + '=' + value)
   }

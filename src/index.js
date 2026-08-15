@@ -118,9 +118,19 @@ function defaultNextUrl (response, currentUrl) {
   return null
 }
 
+// The origin of a URL, or null when it cannot be parsed. Used to refuse
+// pagination hops that leave the original origin (SSRF guard).
+function originOf (url, base) {
+  try {
+    return new URL(url, base).origin
+  } catch (e) {
+    return null
+  }
+}
+
 // Async generator that follows pagination until the pages run out.
 // Options: paginate: { transform, filter, shouldContinue, nextUrl,
-// countLimit, requestLimit, backoff }.
+// countLimit, requestLimit, backoff, allowCrossOrigin }.
 request.paginate = async function * (uri, options) {
   options = options || {}
   const pagination = options.paginate || {}
@@ -133,16 +143,21 @@ request.paginate = async function * (uri, options) {
   const nextUrl = typeof pagination.nextUrl === 'function' ? pagination.nextUrl : defaultNextUrl
   // Safety caps against runaway pagination (malicious/looping `next` links):
   // raise them via the paginate options when a legitimate job needs more.
-  const countLimit = pagination.countLimit || 1000
-  const requestLimit = pagination.requestLimit || 100
+  // 0 disables the cap; undefined falls back to the default.
+  const countLimit = pagination.countLimit === undefined ? 1000 : pagination.countLimit
+  const requestLimit = pagination.requestLimit === undefined ? 100 : pagination.requestLimit
   const backoff = pagination.backoff || 0
+  // Cross-origin hops (e.g. an attacker-controlled `next` pointing at an
+  // internal host) are refused unless explicitly allowed.
+  const allowCrossOrigin = pagination.allowCrossOrigin === true
 
   let currentUrl = uri
+  const origin = originOf(currentUrl)
   let requests = 0
   let count = 0
 
   while (currentUrl) {
-    if (requests >= requestLimit) {
+    if (requestLimit && requests >= requestLimit) {
       return
     }
     const response = await request.promise(currentUrl, options)
@@ -151,7 +166,7 @@ request.paginate = async function * (uri, options) {
     const items = transform(response)
     if (items !== undefined && items !== null) {
       for (const item of items) {
-        if (count >= countLimit) {
+        if (countLimit && count >= countLimit) {
           return
         }
         if (filter && !filter(item)) {
@@ -169,6 +184,12 @@ request.paginate = async function * (uri, options) {
     const next = await nextUrl(response, currentUrl)
     if (!next) {
       return
+    }
+    if (!allowCrossOrigin && origin) {
+      const nextOrigin = originOf(next, currentUrl)
+      if (nextOrigin === null || nextOrigin !== origin) {
+        return
+      }
     }
     currentUrl = next
     if (backoff) {

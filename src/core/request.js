@@ -119,9 +119,9 @@ class Request extends stream.Duplex {
 
     if (self.response) {
       if (self._destdata) {
-        self.emit('error', new Error('You cannot pipe after data has been emitted from the response.'))
+        self.onRequestError(new Error('You cannot pipe after data has been emitted from the response.'))
       } else if (self._ended) {
-        self.emit('error', new Error('You cannot pipe after the response has been ended.'))
+        self.onRequestError(new Error('You cannot pipe after the response has been ended.'))
       } else {
         self.pipeDest(dest)
         super.pipe(dest, opts)
@@ -203,7 +203,7 @@ class Request extends stream.Duplex {
     self._form = new FormData()
     self._form.on('error', function (err) {
       err.message = 'form-data: ' + err.message
-      self.emit('error', err)
+      self.onRequestError(err)
       self.abort()
     })
     return self._form
@@ -332,7 +332,11 @@ class Request extends stream.Duplex {
 
     // If need cookie and cookie is not empty.
     if (cookieString && cookieString.length) {
-      if (self.originalCookieHeader) {
+      // The original Cookie header (from the pre-redirect request) is only
+      // merged back in when we are still talking to the same hostname;
+      // forwarding it to a different host would leak cookies across sites.
+      const sameHost = !self.originalHost || self.uri.hostname === self.originalHost.split(':')[0]
+      if (self.originalCookieHeader && sameHost) {
         // Don't overwrite existing Cookie header.
         self.setHeader('cookie', self.originalCookieHeader + '; ' + cookieString)
       } else {
@@ -412,6 +416,12 @@ class Request extends stream.Duplex {
   then (onFulfilled, onRejected) {
     const self = this
     return new Promise(function (resolve, reject) {
+      if (self._errored) {
+        // The request already failed (possibly synchronously, during
+        // construction); reject immediately so the promise never hangs.
+        reject(self._error || new Error('Request failed'))
+        return
+      }
       if (self._ended) {
         resolve(self.response)
         return

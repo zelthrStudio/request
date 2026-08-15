@@ -16,6 +16,72 @@ function defaultPath (pathname) {
   return index === 0 ? '/' : pathname.slice(0, index)
 }
 
+// Common two-label public suffixes (ICANN PSL samples). `Domain=co.uk` must
+// not be accepted from `evil.co.uk`; the registrable part of such a domain
+// is a single label.
+const TWO_PART_PUBLIC_SUFFIXES = new Set([
+  'co.uk', 'org.uk', 'net.uk', 'gov.uk', 'ac.uk', 'me.uk',
+  'com.au', 'net.au', 'org.au', 'edu.au', 'gov.au',
+  'co.nz', 'net.nz', 'org.nz', 'ac.nz', 'govt.nz',
+  'co.jp', 'ne.jp', 'or.jp', 'go.jp', 'ac.jp', 'ad.jp', 'ed.jp',
+  'co.kr', 'or.kr', 're.kr', 'ne.kr', 'go.kr', 'pe.kr',
+  'com.cn', 'net.cn', 'org.cn', 'gov.cn', 'edu.cn', 'ac.cn',
+  'com.tw', 'org.tw', 'net.tw', 'edu.tw', 'gov.tw', 'idv.tw',
+  'com.hk', 'org.hk', 'net.hk', 'edu.hk', 'gov.hk', 'idv.hk',
+  'com.sg', 'org.sg', 'net.sg', 'edu.sg', 'gov.sg',
+  'com.my', 'net.my', 'org.my', 'gov.my', 'edu.my',
+  'com.ph', 'org.ph', 'net.ph', 'gov.ph', 'edu.ph',
+  'com.vn', 'net.vn', 'org.vn', 'gov.vn', 'edu.vn',
+  'co.th', 'or.th', 'ac.th', 'go.th', 'in.th', 'net.th',
+  'co.id', 'or.id', 'web.id', 'ac.id', 'sch.id', 'go.id',
+  'co.in', 'net.in', 'org.in', 'ac.in', 'gov.in', 'edu.in',
+  'com.br', 'net.br', 'org.br', 'gov.br', 'edu.br',
+  'com.mx', 'org.mx', 'net.mx', 'gob.mx', 'edu.mx',
+  'co.za', 'org.za', 'net.za', 'gov.za', 'ac.za',
+  'com.tr', 'org.tr', 'net.tr', 'gov.tr', 'edu.tr',
+  'com.sa', 'org.sa', 'net.sa', 'gov.sa', 'edu.sa',
+  'com.eg', 'org.eg', 'net.eg', 'gov.eg', 'edu.eg',
+  'com.ae', 'org.ae', 'net.ae', 'gov.ae', 'edu.ae',
+  'com.pk', 'org.pk', 'net.pk', 'gov.pk', 'edu.pk',
+  'com.ng', 'org.ng', 'net.ng', 'gov.ng', 'edu.ng',
+  'com.ke', 'org.ke', 'net.ke', 'go.ke', 'ac.ke',
+  'com.gh', 'org.gh', 'net.gh', 'gov.gh', 'edu.gh',
+  'com.ua', 'org.ua', 'net.ua', 'gov.ua', 'edu.ua',
+  'com.pl', 'org.pl', 'net.pl', 'gov.pl', 'edu.pl',
+  'co.il', 'org.il', 'net.il', 'gov.il', 'ac.il',
+  'com.ar', 'org.ar', 'net.ar', 'gob.ar', 'edu.ar',
+  'com.co', 'org.co', 'net.co', 'gov.co', 'edu.co',
+  'com.pe', 'org.pe', 'net.pe', 'gob.pe', 'edu.pe',
+  'com.ec', 'org.ec', 'net.ec', 'gob.ec', 'edu.ec',
+  'com.ve', 'org.ve', 'net.ve', 'gob.ve', 'edu.ve',
+  'com.py', 'org.py', 'net.py', 'gov.py', 'edu.py',
+  'com.uy', 'org.uy', 'net.uy', 'gub.uy', 'edu.uy',
+  'com.do', 'org.do', 'net.do', 'gob.do', 'edu.do',
+  'com.pa', 'org.pa', 'net.pa', 'gob.pa', 'edu.pa',
+  'com.cr', 'org.cr', 'net.cr', 'go.cr', 'ac.cr',
+  'com.bo', 'org.bo', 'net.bo', 'gob.bo', 'edu.bo',
+  'com.ni', 'org.ni', 'net.ni', 'gob.ni', 'edu.ni',
+  'com.gt', 'org.gt', 'net.gt', 'gob.gt', 'edu.gt',
+  'com.sv', 'org.sv', 'net.sv', 'gob.sv', 'edu.sv',
+  'com.hn', 'org.hn', 'net.hn', 'gob.hn', 'edu.hn',
+  'co.ve', 'com.mm', 'com.kh', 'com.la', 'com.np', 'com.bd',
+  'com.lk', 'com.mv', 'com.bn', 'com.kw', 'com.qa', 'com.om',
+  'com.bh', 'com.jo', 'com.lb', 'com.sy', 'com.ly', 'com.mt',
+  'com.cy', 'com.gr', 'com.pt', 'com.es', 'com.fr', 'com.de',
+  'com.it', 'com.nl', 'com.be', 'com.at', 'com.ch', 'com.se',
+  'com.no', 'com.dk', 'com.fi', 'com.ie', 'com.ro', 'com.bg',
+  'com.hu', 'com.cz', 'com.sk', 'com.si', 'com.hr', 'com.ba',
+  'com.rs', 'com.mk', 'com.al', 'com.ge', 'com.am', 'com.az',
+  'com.kz', 'com.uz', 'com.tj', 'com.kg', 'com.tm', 'com.mn',
+  'com.mo', 'com.ps', 'com.sd', 'com.et', 'com.tz', 'com.ug',
+  'com.mw', 'com.mz', 'com.ao', 'com.cm', 'com.ci', 'com.sn',
+  'com.ml', 'com.bj', 'com.tg', 'com.ne', 'com.gm', 'com.sl',
+  'com.lr', 'com.gn', 'com.cf', 'com.cg', 'com.ga', 'com.td',
+  'com.so', 'com.dj', 'com.er', 'com.rw', 'com.bi', 'com.mg',
+  'com.mu', 'com.sc', 'com.fj', 'com.pg', 'com.sb', 'com.ws',
+  'com.to', 'com.nu', 'com.ck', 'com.tv', 'com.pf', 'com.nc'
+])
+
 function pathMatches (requestPath, cookiePath) {
   if (requestPath === cookiePath) {
     return true
@@ -128,13 +194,21 @@ class CookieJar {
       // RFC 6265 §5.3: a server may only set a Domain attribute that
       // domain-matches the request host, otherwise any server could plant
       // cookies for unrelated hosts into the (shared/global) jar. Without a
-      // public-suffix list, single-label domains ("com", "net", ...) are
-      // also rejected unless they are the request host itself, closing the
-      // `Domain=com`-style poisoning variant.
+      // full public-suffix list, single-label domains ("com", "net", ...)
+      // and common two-label public suffixes ("co.uk", "com.au", ...) are
+      // rejected unless they are the request host itself, closing the
+      // `Domain=com` / `Domain=co.uk`-style poisoning variants.
       const host = uri.hostname.toLowerCase()
       const domain = cookie.domain.toLowerCase()
       const domainMatches = host === domain || host.endsWith('.' + domain)
-      if (!domainMatches || (domain.indexOf('.') === -1 && host !== domain)) {
+      if (!domainMatches) {
+        return
+      }
+      if (domain.indexOf('.') === -1 && host !== domain) {
+        return
+      }
+      if (host !== domain && domain.split('.').length <= 2 &&
+        TWO_PART_PUBLIC_SUFFIXES.has(domain)) {
         return
       }
     }

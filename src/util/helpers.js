@@ -13,6 +13,18 @@ function isPlainObject (obj) {
   return obj !== null && typeof obj === 'object' && obj.constructor === Object
 }
 
+// Keys that must never be copied with a plain assignment: on a JSON-parsed
+// object, `__proto__` is an own data property, and `target['__proto__'] =
+// value` would silently mutate the target's prototype instead of creating a
+// property (prototype pollution).
+const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
+function copyKey (target, key, value) {
+  if (!UNSAFE_KEYS.has(key)) {
+    target[key] = value
+  }
+}
+
 // Shallow or deep extend. Pass `true` as the first argument for a deep merge.
 function extend (obj, ...rest) {
   let deep = false
@@ -27,6 +39,9 @@ function extend (obj, ...rest) {
     }
     for (const key of Object.keys(source)) {
       const value = source[key]
+      if (UNSAFE_KEYS.has(key)) {
+        continue
+      }
       if (deep && isPlainObject(value)) {
         if (!isPlainObject(target[key])) {
           target[key] = {}
@@ -43,7 +58,7 @@ function extend (obj, ...rest) {
 function copy (obj) {
   const o = {}
   for (const key of Object.keys(obj)) {
-    o[key] = obj[key]
+    copyKey(o, key, obj[key])
   }
   return o
 }

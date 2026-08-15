@@ -24,9 +24,16 @@ declare namespace request {
   }
 
   interface CookieJar {
+    // tough-cookie-style sync API, provided by the raw CookieJar class.
     setCookieSync (cookieOrStr: Cookie | string, url: string | URL): void
     getCookiesSync (url: string | URL): Cookie[]
     getCookieStringSync (url: string | URL): string
+    // request-style API, provided by the jar returned from request.jar().
+    // Both must be typed: request.jar() returns an object that only has the
+    // non-Sync methods.
+    setCookie (cookieOrStr: Cookie | string, url: string | URL, options?: Record<string, unknown>): void
+    getCookies (url: string | URL): Cookie[]
+    getCookieString (url: string | URL): string
   }
 
   interface Static {

@@ -14,6 +14,11 @@ const { shouldRetryStatus, retryDelay } = require('../util').retry
 const { runAttempt } = require('./start')
 const { closeDisposableAgent, makeBodyLimitError } = require('../transport')
 
+// Size cap for bodies buffered in memory (callback/promise mode) when the
+// caller did not set an explicit `maxBytes`. Streamed responses are
+// unaffected unless the caller opts into a limit.
+const DEFAULT_MAX_BYTES = 100 * 1024 * 1024
+
 // Adapt the native response stream (http.IncomingMessage or an http2 stream)
 // into the response object, carrying status code, headers and request
 // metadata.
@@ -57,18 +62,35 @@ async function handleRequestResponse (self, response) {
     }
   }
 
+  // Collect the raw Set-Cookie headers. http/1.x responses carry them in
+  // rawHeaders (one entry per header line); http/2 and undici join multiple
+  // Set-Cookie lines into one string, which must be split back apart.
   const setCookieName = Object.keys(response.headers).find(function (name) {
     return name.toLowerCase() === 'set-cookie'
   })
 
   if (setCookieName && !self._disableCookies) {
-    const value = response.headers[setCookieName]
-    if (Array.isArray(value)) {
-      value.forEach(addCookie)
-    } else {
-      // undici joins multiple Set-Cookie headers into one string.
-      String(value).split(', ').forEach(addCookie)
+    const splitSetCookies = function (value) {
+      if (Array.isArray(value)) {
+        return value
+      }
+      if (response.rawHeaders) {
+        const out = []
+        for (let i = 0; i < response.rawHeaders.length; i += 2) {
+          if (response.rawHeaders[i].toLowerCase() === 'set-cookie') {
+            out.push(response.rawHeaders[i + 1])
+          }
+        }
+        if (out.length) {
+          return out
+        }
+      }
+      // Fallback: split on ', ' only when the fragment starts with a cookie
+      // name followed by '='. A naive split(', ') would tear the "Wdy, DD
+      // Mon YYYY" date inside an Expires attribute into a bogus cookie.
+      return String(value).split(/,\s*(?=[A-Za-z0-9!#$%&'*+\-.^_`|~]+\s*=)/).filter(Boolean)
     }
+    splitSetCookies(response.headers[setCookieName]).forEach(addCookie)
   }
 
   if (self._redirect.onResponse(response)) {
@@ -242,12 +264,15 @@ function handleResponseData (self, chunk) {
   }
   if (self._collect) {
     const next = (self._collectedBytes || 0) + chunk.length
-    if (self.maxBytes && next > self.maxBytes) {
-      // Abort once the response exceeds the caller's size budget so a
-      // malicious or runaway server cannot exhaust memory. The destroyed
-      // stream is given a no-op error listener so the single error we emit
-      // below is the only one consumers see.
-      const err = makeBodyLimitError(self.maxBytes)
+    // Every body that is buffered in memory (callback/promise mode) gets a
+    // size budget: an explicit `maxBytes` option, or a generous default, so
+    // a malicious or runaway server cannot exhaust memory.
+    const limit = self.maxBytes !== undefined ? self.maxBytes : DEFAULT_MAX_BYTES
+    if (next > limit) {
+      // Abort once the response exceeds the caller's size budget. The
+      // destroyed stream is given a no-op error listener so the single
+      // error we emit below is the only one consumers see.
+      const err = makeBodyLimitError(limit)
       const content = self.responseContent
       if (content && typeof content.destroy === 'function') {
         content.on('error', function () {})

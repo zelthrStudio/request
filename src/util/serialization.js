@@ -7,7 +7,9 @@
 // credentials (Authorization/Bearer), cookies or API keys.
 const SENSITIVE_HEADER_RE = /^(authorization|proxy-authorization|cookie|set-cookie|x-api-key|api-key|apikey)$/i
 
-// Return a simpler request object to allow serialization.
+// Return a simpler request object to allow serialization. The URI's
+// userinfo (user:pass@) is stripped so logging a request never leaks
+// credentials embedded in the URL.
 function requestToJSON () {
   const headers = {}
   for (const key of Object.keys(this.headers || {})) {
@@ -15,8 +17,14 @@ function requestToJSON () {
       headers[key] = this.headers[key]
     }
   }
+  let uri = this.uri
+  if (uri instanceof URL && (uri.username || uri.password)) {
+    uri = new URL(uri.href)
+    uri.username = ''
+    uri.password = ''
+  }
   return {
-    uri: this.uri,
+    uri,
     method: this.method,
     headers
   }
@@ -24,10 +32,16 @@ function requestToJSON () {
 
 // Return a simpler response object to allow serialization.
 function responseToJSON () {
+  const headers = {}
+  for (const key of Object.keys(this.headers || {})) {
+    if (!SENSITIVE_HEADER_RE.test(key)) {
+      headers[key] = this.headers[key]
+    }
+  }
   return {
     statusCode: this.statusCode,
     body: this.body,
-    headers: this.headers,
+    headers,
     request: requestToJSON.call(this.request)
   }
 }

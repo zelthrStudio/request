@@ -10,17 +10,23 @@ const crypto = require('crypto')
 // package. Stream values need a knownLength so the body length can be
 // computed (matching form-data behavior).
 
+// Strip characters that would break out of the Content-Disposition header:
+// quotes and CR/LF are the injection vector for forged multipart headers.
+function sanitizeToken (value) {
+  return String(value).replace(/["\r\n]/g, '')
+}
+
 function partHeader (part, boundary) {
   let header = '--' + boundary + '\r\n'
-  header += 'Content-Disposition: form-data; name="' + part.name + '"'
+  header += 'Content-Disposition: form-data; name="' + sanitizeToken(part.name) + '"'
   const filename = part.options.filename
   if (filename) {
-    header += '; filename="' + filename + '"'
+    header += '; filename="' + sanitizeToken(filename) + '"'
   }
   header += '\r\n'
   const contentType = part.options.contentType
   if (contentType) {
-    header += 'Content-Type: ' + contentType + '\r\n'
+    header += 'Content-Type: ' + sanitizeToken(contentType) + '\r\n'
   }
   header += '\r\n'
   return header

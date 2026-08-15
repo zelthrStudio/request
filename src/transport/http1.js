@@ -19,9 +19,15 @@ function proxyAuthHeader (proxy) {
   if (!proxy || !proxy.username) {
     return null
   }
-  const user = decodeURIComponent(proxy.username)
-  const pass = decodeURIComponent(proxy.password || '')
-  return 'Basic ' + toBase64(user + ':' + pass)
+  // A malformed percent-escape in the proxy credentials must not throw
+  // synchronously out of the transport; skip the Proxy-Authorization header.
+  try {
+    const user = decodeURIComponent(proxy.username)
+    const pass = decodeURIComponent(proxy.password || '')
+    return 'Basic ' + toBase64(user + ':' + pass)
+  } catch (e) {
+    return null
+  }
 }
 
 function buildOptions (self, extraHeaders) {
@@ -42,6 +48,10 @@ function buildOptions (self, extraHeaders) {
 
   if (self.lookup) {
     options.lookup = self.lookup
+  }
+
+  if (self.family !== undefined) {
+    options.family = self.family
   }
 
   if (uri.protocol === 'https:') {

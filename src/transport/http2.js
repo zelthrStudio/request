@@ -24,55 +24,80 @@ function getSession (self) {
   return new Promise(function (resolve, reject) {
     const key = sessionKey(self)
     const existing = sessions.get(key)
-    if (existing && !existing.closed && !existing.destroyed) {
-      resolve({ session: existing, key, fallback: false })
-      return
-    }
-
-    const options = { connectTimeout: 10000 }
-    if (self.lookup) {
-      options.lookup = self.lookup
-    }
-    if (self.uri.protocol === 'https:') {
-      options.ALPNProtocols = ['h2', 'http/1.1']
-      const connect = connectOptions(self)
-      for (const name of Object.keys(connect)) {
-        options[name] = connect[name]
-      }
-    }
-
-    let session
-    try {
-      session = http2.connect(self.uri.origin, options)
-    } catch (err) {
-      reject(err)
-      return
-    }
-
-    session.once('error', function () {
-      sessions.delete(key)
-    })
-    session.once('close', function () {
-      if (sessions.get(key) === session) {
-        sessions.delete(key)
-      }
-    })
-
-    session.once('connect', function () {
-      if (self.uri.protocol === 'https:' && session.alpnProtocol === 'http/1.1') {
-        // The server only speaks HTTP/1.1; close this session and fall back.
-        session.close()
-        sessions.delete(key)
-        resolve({ session: null, key, fallback: true })
+    if (existing) {
+      // A concurrent request may already be connecting: the map holds a
+      // promise until the session is established, so concurrent requests
+      // share one connection instead of opening one each.
+      if (typeof existing.then === 'function') {
+        existing.then(resolve, reject)
         return
       }
-      sessions.set(key, session)
-      resolve({ session, key, fallback: false })
+      if (!existing.closed && !existing.destroyed) {
+        resolve({ session: existing, key, fallback: false })
+        return
+      }
+    }
+
+    const connecting = new Promise(function (resolve, reject) {
+      const options = { connectTimeout: 10000 }
+      if (self.lookup) {
+        options.lookup = self.lookup
+      }
+      if (self.uri.protocol === 'https:') {
+        options.ALPNProtocols = ['h2', 'http/1.1']
+        const connect = connectOptions(self)
+        for (const name of Object.keys(connect)) {
+          options[name] = connect[name]
+        }
+      }
+
+      let session
+      try {
+        session = http2.connect(self.uri.origin, options)
+      } catch (err) {
+        reject(err)
+        return
+      }
+
+      session.once('error', function () {
+        if (sessions.get(key) === session) {
+          sessions.delete(key)
+        }
+      })
+      session.once('close', function () {
+        if (sessions.get(key) === session) {
+          sessions.delete(key)
+        }
+      })
+
+      session.once('connect', function () {
+        if (self.uri.protocol === 'https:' && session.alpnProtocol === 'http/1.1') {
+          // The server only speaks HTTP/1.1; close this session and fall back.
+          session.close()
+          sessions.delete(key)
+          resolve({ session: null, key, fallback: true })
+          return
+        }
+        sessions.set(key, session)
+        resolve({ session, key, fallback: false })
+      })
+
+      session.once('error', function (err) {
+        reject(err)
+      })
     })
 
-    session.once('error', function (err) {
-      reject(err)
+    // Publish the in-flight promise immediately; replace it with the real
+    // session (or drop it) when the connection settles.
+    sessions.set(key, connecting)
+    connecting.then(function (result) {
+      if (result.session) {
+        sessions.set(key, result.session)
+      }
+    }, function () {
+      sessions.delete(key)
     })
+    connecting.then(resolve, reject)
   })
 }
 
@@ -164,9 +189,10 @@ function dispatchStream (self, session) {
 }
 
 function closeSessions () {
-  for (const session of sessions.values()) {
-    if (!session.closed && !session.destroyed) {
-      session.close()
+  for (const value of sessions.values()) {
+    // The map may hold in-flight connect promises (no .close method).
+    if (typeof value.close === 'function' && !value.closed && !value.destroyed) {
+      value.close()
     }
   }
   sessions.clear()

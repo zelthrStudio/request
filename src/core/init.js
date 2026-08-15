@@ -93,15 +93,15 @@ function initRequest (self, options) {
   // specified as a relative path and is appended to baseUrl).
   if (self.baseUrl) {
     if (typeof self.baseUrl !== 'string') {
-      return self.emit('error', new Error('options.baseUrl must be a string'))
+      return self.onRequestError(new Error('options.baseUrl must be a string'))
     }
 
     if (typeof self.uri !== 'string') {
-      return self.emit('error', new Error('options.uri must be a string when using options.baseUrl'))
+      return self.onRequestError(new Error('options.uri must be a string when using options.baseUrl'))
     }
 
     if (self.uri.indexOf('//') === 0 || self.uri.indexOf('://') !== -1) {
-      return self.emit('error', new Error('options.uri must be a path when using options.baseUrl'))
+      return self.onRequestError(new Error('options.uri must be a path when using options.baseUrl'))
     }
 
     // Handle all cases to make sure that there's only one slash between
@@ -123,7 +123,7 @@ function initRequest (self, options) {
 
   // A URI is needed by this point, emit error if we haven't been able to get one.
   if (!self.uri) {
-    return self.emit('error', new Error('options.uri is a required argument'))
+    return self.onRequestError(new Error('options.uri is a required argument'))
   }
 
   // If a string URI/URL was given, parse it into a URL object.
@@ -131,20 +131,20 @@ function initRequest (self, options) {
     try {
       self.uri = new URL(self.uri)
     } catch (e) {
-      return self.emit('error', new Error('Invalid URI "' + self.uri + '": ' + e.message))
+      return self.onRequestError(new Error('Invalid URI "' + self.uri + '": ' + e.message))
     }
   }
 
   if (!(self.uri instanceof URL)) {
-    return self.emit('error', new Error('options.uri must be a string or URL object'))
+    return self.onRequestError(new Error('options.uri must be a string or URL object'))
   }
 
   if (self.uri.protocol === 'unix:') {
-    return self.emit('error', new Error('`unix://` URL scheme is no longer supported.'))
+    return self.onRequestError(new Error('`unix://` URL scheme is no longer supported.'))
   }
 
   if (self.uri.protocol !== 'http:' && self.uri.protocol !== 'https:') {
-    return self.emit('error', new Error('Invalid protocol: ' + self.uri.protocol))
+    return self.onRequestError(new Error('Invalid protocol: ' + self.uri.protocol))
   }
 
   if (self.strictSSL === false) {
@@ -163,8 +163,10 @@ function initRequest (self, options) {
       // by a redirection (can save some hair).
       message += '. This can be caused by a crappy redirection.'
     }
+    self._error = new Error(message)
+    self._errored = true
     self.abort()
-    return self.emit('error', new Error(message))
+    return self.emit('error', self._error)
   }
 
   if (!Object.prototype.hasOwnProperty.call(self, 'proxy')) {
@@ -176,12 +178,12 @@ function initRequest (self, options) {
     try {
       self.proxy = new URL(self.proxy)
     } catch (e) {
-      return self.emit('error', new Error('Invalid proxy "' + self.proxy + '": ' + e.message))
+      return self.onRequestError(new Error('Invalid proxy "' + self.proxy + '": ' + e.message))
     }
   }
 
   if (self.http2 && self.proxy) {
-    return self.emit('error', new Error('options.http2 is not supported with proxies'))
+    return self.onRequestError(new Error('options.http2 is not supported with proxies'))
   }
 
   self._redirect.onRequest(options)
@@ -279,9 +281,22 @@ function initRequest (self, options) {
     }
   }
 
+  if (options.maxBytes !== undefined) {
+    self.maxBytes = options.maxBytes
+  }
+
   if (self.uri.username && !self.hasHeader('authorization')) {
-    const uriUser = decodeURIComponent(self.uri.username)
-    const uriPass = decodeURIComponent(self.uri.password || '')
+    // The username/password components of a URL are not decoded by the URL
+    // parser; a malformed percent-escape (e.g. "%zz") would throw here and
+    // crash the caller synchronously, so surface it as a request error.
+    let uriUser
+    let uriPass
+    try {
+      uriUser = decodeURIComponent(self.uri.username)
+      uriPass = decodeURIComponent(self.uri.password || '')
+    } catch (e) {
+      return self.onRequestError(new Error('Invalid percent-encoding in URI credentials: ' + e.message))
+    }
     self.auth(uriUser, uriPass, true)
   }
 
@@ -316,7 +331,7 @@ function initRequest (self, options) {
       if (length) {
         self.setHeader('content-length', length)
       } else {
-        self.emit('error', new Error('Argument error, options.body.'))
+        self.onRequestError(new Error('Argument error, options.body.'))
       }
     }
   }
@@ -327,7 +342,7 @@ function initRequest (self, options) {
 
   self.on('pipe', function (src) {
     if (self.ntick && self._started) {
-      self.emit('error', new Error('You cannot pipe to this stream after the outbound request has started.'))
+      self.onRequestError(new Error('You cannot pipe to this stream after the outbound request has started.'))
     }
     self.src = src
     if (isReadStream(src)) {

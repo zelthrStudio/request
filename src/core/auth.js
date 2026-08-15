@@ -10,6 +10,16 @@ const md5 = helpers.md5
 const toBase64 = helpers.toBase64
 const caseless = helpers.caseless
 
+// Digest nonce replay counters: one strictly-increasing nc per nonce so a
+// re-challenge with the same nonce does not reuse nc=00000001 (RFC 2617).
+const digestCounters = new Map()
+
+// Challenge values come from a server-controlled header; strip CR/LF and
+// quotes so a hostile realm/nonce cannot inject fake Digest parameters.
+function sanitizeChallenge (value) {
+  return String(value).replace(/[\r\n"]/g, '')
+}
+
 function Auth (request) {
   this.request = request
   this.hasAuth = false
@@ -22,7 +32,7 @@ function Auth (request) {
 Auth.prototype.basic = function (user, pass, sendImmediately) {
   const self = this
   if (typeof user !== 'string' || (pass !== undefined && typeof pass !== 'string')) {
-    self.request.emit('error', new Error('auth() received invalid user or password'))
+    self.request.onRequestError(new Error('auth() received invalid user or password'))
   }
   self.user = user
   self.pass = pass
@@ -58,7 +68,7 @@ Auth.prototype.digest = function (method, path, authHeader) {
     if (!match) {
       break
     }
-    challenge[match[1]] = match[2] || match[3]
+    challenge[match[1]] = sanitizeChallenge(match[2] || match[3])
   }
 
   const ha1Compute = function (algorithm, user, realm, pass, nonce, cnonce) {
@@ -70,7 +80,11 @@ Auth.prototype.digest = function (method, path, authHeader) {
   }
 
   const qop = /(^|,)\s*auth\s*($|,)/.test(challenge.qop) && 'auth'
-  const nc = qop && '00000001'
+  const nonceCount = qop && ((digestCounters.get(challenge.nonce) || 0) + 1)
+  if (nonceCount) {
+    digestCounters.set(challenge.nonce, nonceCount)
+  }
+  const nc = qop && String(nonceCount).padStart(8, '0')
   const cnonce = qop && crypto.randomBytes(8).toString('hex')
   const ha1 = ha1Compute(challenge.algorithm, self.user, challenge.realm, self.pass, challenge.nonce, cnonce)
   const ha2 = md5(method + ':' + path)
@@ -111,7 +125,7 @@ Auth.prototype.onRequest = function (user, pass, sendImmediately, bearer) {
 
   let authHeader
   if (bearer === undefined && user === undefined) {
-    self.request.emit('error', new Error('no auth mechanism defined'))
+    self.request.onRequestError(new Error('no auth mechanism defined'))
   } else if (bearer !== undefined) {
     authHeader = self.bearer(bearer, sendImmediately)
   } else {
