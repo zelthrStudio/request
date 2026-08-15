@@ -88,4 +88,35 @@ async function run (): Promise<void> {
   })
 }
 
+// Web & Edge entry (@zelthr/request/web, alias ./edge)
+async function runWeb (): Promise<void> {
+  const web = require('../src/web')
+  const response = await web.promise({
+    uri: 'http://example.com',
+    json: true,
+    dedupe: true,
+    schema: {
+      safeParse (body: any) {
+        return { success: true, output: body }
+      }
+    },
+    rateLimit: { rate: 5, capacity: 10 },
+    circuitBreaker: true
+  })
+  const status: number = response.statusCode
+  const headers: Record<string, string> = response.headers
+  const body: any = response.body
+  void status
+  void headers
+  void body
+
+  const viaVerb = await web.get('http://example.com', { timeout: 1000 })
+  void viaVerb
+
+  const client = web.defaults({ baseUrl: 'http://example.com', json: true })
+  const viaClient = await client.promise('/x')
+  void viaClient
+}
+
 void run
+void runWeb

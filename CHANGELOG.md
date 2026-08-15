@@ -1,5 +1,26 @@
 # Change Log
 
+## [1.3.0] — 2026-08-15 — web & Edge runtime entry + framework docs
+
+### Added
+
+- **Web & Edge runtime entry (`@zelthr/request/web`, alias `./edge`):** a
+  fetch-based client with the same core API (callback style, `promise()`,
+  convenience verbs, `defaults()`) for Next.js middleware/Edge, Vercel Edge
+  Functions, Cloudflare Workers, Deno and browsers. No Node built-in
+  imports, so it bundles cleanly for any web target. Shares the main
+  package's circuit breaker, per-host rate limiter and schema validator,
+  and supports `dedupe`, `timeout`, redirects (with `followRedirect`,
+  `followAllRedirects`, `followOriginalHttpMethod`, `maxRedirects`, and
+  cross-host authorization stripping), `json`/`form`/`qs`/`auth`,
+  `maxBytes`, `encoding` (string or `Uint8Array`) and `hooks.beforeRequest`.
+  Documented limitations: buffered responses only, `timings.total` only,
+  `ETIMEDOUT`/`ENETWORK` error codes, no retry/cookies/proxy/cache/mock/
+  paginate/streaming/http2.
+- **Schema validation errors now carry `err.validation = true`** on every
+  path (including zod-style `parse` throws, whose original error instance
+  is preserved), so they never trip the circuit breaker.
+
 ## [1.2.0] — 2026-08-15 — reliability features: dedupe, schema, circuit breaker, rate limit
 
 ### Added

@@ -10,5 +10,5 @@
     "skipLibCheck": true,
     "esModuleInterop": true
   },
-  "include": ["src/index.d.ts", "src/index.d.mts", "tests/typecheck.ts", "tests/typecheck-esm.mts"]
+  "include": ["src/index.d.ts", "src/index.d.mts", "src/web/index.d.ts", "src/web/index.d.mts", "tests/typecheck.ts", "tests/typecheck-esm.mts"]
 }

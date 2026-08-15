@@ -11,7 +11,12 @@
 
 function validateWithSchema (schema, body) {
   if (typeof schema === 'function') {
-    return schema(body)
+    try {
+      return schema(body)
+    } catch (err) {
+      err.validation = true
+      throw err
+    }
   }
   if (schema && typeof schema.validate === 'function') {
     // joi
@@ -24,8 +29,15 @@ function validateWithSchema (schema, body) {
     return result ? result.value : body
   }
   if (schema && typeof schema.parse === 'function') {
-    // zod: the ZodError propagates as-is so callers keep the .issues API.
-    return schema.parse(body)
+    // zod: the ZodError propagates as-is (with .issues) so callers keep
+    // the full API; the validation marker keeps it out of the circuit
+    // breaker's failure count.
+    try {
+      return schema.parse(body)
+    } catch (err) {
+      err.validation = true
+      throw err
+    }
   }
   if (schema && typeof schema.safeParse === 'function') {
     // valibot

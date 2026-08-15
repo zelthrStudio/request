@@ -62,6 +62,8 @@ request('http://www.google.com', function (error, response, body) {
 - [Timeouts and errors](#timeouts-and-errors)
 - [TLS](#tls)
 - [Connection pooling](#connection-pooling)
+- [Web & Edge runtimes (Next.js)](#web--edge-runtimes-nextjs)
+- [Framework integrations](#framework-integrations)
 - [Timings](#timings)
 - [TypeScript / ESM](#typescript--esm)
 - [API reference](#api-reference)
@@ -563,6 +565,92 @@ Requests share a keep-alive pool by default:
 ```js
 const client = request.defaults({ agent: new http.Agent({ keepAlive: true }) })
 const response = await client.promise('https://example.com/')
+```
+
+## Web & Edge runtimes (Next.js)
+
+The main package is Node-only (it speaks directly to `http`/`net`/`tls`).
+For runtimes without the Node http stack — **Next.js middleware & Edge
+runtime, Vercel Edge Functions, Cloudflare Workers, Deno and browsers** —
+use the fetch-based entry:
+
+```js
+import request from '@zelthr/request/web'   // alias: '@zelthr/request/edge'
+```
+
+The API mirrors the main package: callback style, `request.promise()`,
+convenience verbs (`get`/`post`/...), `request.defaults()`, plus the
+same opt-in reliability features (`dedupe`, `schema`, `circuitBreaker`,
+`rateLimit` — implemented in-process, no dependencies). It has **no Node
+built-in imports**, so it bundles cleanly for any web target.
+
+```ts
+// Next.js Route Handler / Server Component (Edge runtime)
+import request from '@zelthr/request/web'
+
+export async function GET () {
+  const response = await request.promise({
+    uri: 'https://api.example.com/status',
+    json: true,
+    schema: { parse: (body) => { if (!body.ok) throw new Error('bad') ; return body } },
+    dedupe: true,                        // coalesce concurrent identical calls
+    circuitBreaker: { threshold: 5, cooldown: 30000 },
+    rateLimit: { rate: 10, capacity: 10 }
+  })
+  return Response.json(response.body)
+}
+```
+
+Differences from the main package (all documented limitations):
+
+- **Buffered only** — responses are collected into `response.body` (a
+  string, or a `Uint8Array` with `encoding: null`); there are no Node
+  streams. `response.headers` is a plain object.
+- `time: true` records `elapsedTime` and `timings.total` only.
+- `timeout` is a total per-attempt budget (not per-phase); it rejects
+  with `code: 'ETIMEDOUT'`.
+- Network failures reject with `code: 'ENETWORK'` (the underlying fetch
+  error is attached as `cause`).
+- `gzip`/`brotli` are no-ops — fetch advertises `accept-encoding` and
+  decompresses transparently.
+- Not available: `retry`, `jar`/cookies, `proxy`, `cache`, `mock`,
+  `paginate`, `streaming`, `http2`/TLS options, `forever`/`pool`/`agent`,
+  `progress`, DNS options. Cookies are handled by the platform
+  (undici/Cloudflare), and proxies are typically rewrites in middleware.
+
+## Framework integrations
+
+`@zelthr/request` is a plain Node package, so it drops into any
+framework's server-side code with no adapter:
+
+```js
+// Next.js Route Handler (Node runtime) — app/api/items/route.js
+import { NextResponse } from 'next/server'
+import request from '@zelthr/request'
+
+export async function GET () {
+  const response = await request.promise({
+    uri: 'https://api.example.com/items',
+    json: true,
+    qs: { limit: 20 }
+  })
+  return NextResponse.json(response.body)
+}
+```
+
+```js
+// Express / Fastify / NestJS — anything with a Node handler
+const request = require('@zelthr/request')
+
+app.get('/weather', async (req, res) => {
+  const response = await request.promise({
+    uri: 'https://api.example.com/weather',
+    qs: req.query,
+    json: true,
+    time: true
+  })
+  res.json({ body: response.body, timings: response.timings })
+})
 ```
 
 ## Timings

@@ -1,7 +1,7 @@
 {
   "name": "@zelthr/request",
   "description": "Simplified HTTP request client. Modern remake of the classic request package.",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "keywords": [
     "http",
     "https",
@@ -33,6 +33,26 @@
       "require": {
         "types": "./src/index.d.ts",
         "default": "./src/index.js"
+      }
+    },
+    "./web": {
+      "import": {
+        "types": "./src/web/index.d.mts",
+        "default": "./src/web/index.mjs"
+      },
+      "require": {
+        "types": "./src/web/index.d.ts",
+        "default": "./src/web/index.js"
+      }
+    },
+    "./edge": {
+      "import": {
+        "types": "./src/web/index.d.mts",
+        "default": "./src/web/index.mjs"
+      },
+      "require": {
+        "types": "./src/web/index.d.ts",
+        "default": "./src/web/index.js"
       }
     },
     "./package.json": "./package.json"
