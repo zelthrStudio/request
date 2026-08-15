@@ -1,5 +1,88 @@
 # Change Log
 
+## [1.1.2] — 2026-08-15 — security & bug audit pass 2 (report-1.md)
+
+### Fixed
+
+- **Security (HIGH): a malformed `Location` header no longer crashes the
+  process.** An unparseable redirect URL (`302 Location: http://[`) threw out
+  of `handleRequestResponse`, propagated through an unawaited call chain and
+  became an unhandled promise rejection (fatal on Node ≥15). The URL is now
+  parsed under try/catch and routed through the request error path, and the
+  `onRequestResponse` chain in `start()` is awaited so no rejection escapes
+  to the event loop. Angle-bracketed `Location` values (`<http://x>`) are
+  treated as no-redirect instead of silently redirecting to a garbage path.
+- **Security: a custom `lookup` can no longer be bypassed by socket reuse.**
+  The pool key now includes the `lookup` function, so a request with a DNS
+  pinning/SSRF-guard resolver never reuses a keep-alive socket created by a
+  request without it. Plain-http requests with `lookup`/`localAddress`/
+  `family` get a dedicated agent instead of the shared one, proxy and custom
+  pool agents carry the connect options, and HTTP/2 sessions are keyed the
+  same way.
+- **Security: the shared HTTP cache no longer stores cookie-scoped or
+  `Cache-Control: private` responses**, so one request's session data can
+  never be served to another request for the same URL. The cache also has a
+  total byte budget (`maxBytes`, default 64 MB) in addition to `maxEntries`,
+  and eviction now refreshes recency (delete-then-set), so hot URLs are no
+  longer evicted first.
+- **Security: the CONNECT tunnel phase has a timeout.** A proxy that accepts
+  TCP but never answers CONNECT used to hang the request forever, even with
+  `timeout` set; the request timeout now applies to the tunnel phase too.
+- **Security: proxy absolute-form request lines and redirect Referers no
+  longer carry URL credentials.** `http://user:pass@host/...` sent through a
+  proxy now yields `http://host/...` (fragment excluded), and the Referer on
+  a same-host redirect is stripped of userinfo and fragment.
+- **Security: `qs()` with a URL fragment no longer swallows the query** — the
+  query is set via `uri.search`, preserving the fragment.
+- **Security: the public-suffix table now covers `co.ke`, `co.ug`, `co.tz`,
+  `co.rw`, `co.bw`, `co.na`, `co.zm`, `co.zw`, `co.mw`, `co.mz`, `co.sz`,
+  `co.ls`, `co.bi`, `co.ao`, `co.mg`, `co.mu`, `co.sc`, `co.cr`, `co.ni`,
+  `co.sv`, `co.hn`, `co.gt`, `co.do`, `co.py`, `co.uy`, `co.ec` and friends**,
+  so those registrable zones can no longer be claimed via a `Domain=`
+  attribute.
+- **Security: the digest nonce counter map is capped** (LRU eviction past
+  1000 entries), so a server rotating nonces per request can no longer leak a
+  Map entry per nonce for the process lifetime.
+- **HTTP/2 session fixes**: a single `'error'` listener settles the
+  connecting promise (was registered twice), a wall-clock timeout (the
+  request `timeout`, or 30 s) covers TLS/ALPN stalls that `connectTimeout`
+  cannot see — a server that accepts TCP but never completes the handshake
+  no longer hangs every request to that origin — and `closeSessions()`
+  destroys sessions still mid-connection so shutdown no longer leaks sockets.
+- **Non-ASCII array/multipart bodies are no longer truncated.** The
+  `content-length` for array bodies now sums UTF-8 byte lengths (not UTF-16
+  code units) and multipart builds buffer string parts, so a Thai body is
+  sent whole instead of being cut mid-character and desyncing keep-alive
+  parsing.
+- **`request.promise()` rejects instead of throwing synchronously** on
+  invalid URIs; **`defaults().cookie` actually parses cookie strings** (was
+  always null); **`qs.stringify` reports a clear error on circular objects**
+  instead of overflowing the stack; the **cookie jar prunes expired
+  cookies** on read/set, so rotating cookie names can no longer grow memory
+  without bound.
+- **A 307/308 redirect of a streamed body fails loudly** ("the streamed
+  request body has already been consumed") instead of silently re-sending an
+  empty body.
+- **Unsupported request body types error instead of sending an empty
+  request** (e.g. `body: 0`).
+- **Agent pools are capped** (LRU eviction of the least recently used agent
+  maps: 100 https, 50 http/proxy/custom), so a per-tenant CA pattern cannot
+  exhaust file descriptors; custom pool agents now honor TLS/socket connect
+  options instead of silently dropping them.
+- **`request.reset()` clears the global mock handlers**, and the DNS cache
+  drops TTL-expired entries immediately instead of only lazily replacing
+  them.
+
+### Notes
+
+- The Set-Cookie fallback split regex is retained: it only runs when neither
+  `rawHeaders` (http/1.x) nor the header array (http/2) carries the
+  set-cookie values (fabricated/mock responses), and it is bounded by Node's
+  16 KB `maxHeaderSize`.
+- The 304-refresh validator handling was already correct (validators are
+  never overwritten); a regression test now pins the stored
+  `content-length` and body across revalidation.
+
 ## [1.1.1] — 2026-08-15 — security & bug-fix audit (report.md)
 
 ### Fixed

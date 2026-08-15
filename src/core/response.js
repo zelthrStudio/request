@@ -11,7 +11,7 @@ const { finalizeTimings } = require('../util').timing
 const { emitProgress } = require('../util').progress
 const cookies = require('../cookie')
 const { shouldRetryStatus, retryDelay } = require('../util').retry
-const { runAttempt } = require('./start')
+const { safeRunAttempt } = require('./start')
 const { closeDisposableAgent, makeBodyLimitError } = require('../transport')
 
 // Size cap for bodies buffered in memory (callback/promise mode) when the
@@ -104,7 +104,7 @@ async function handleRequestResponse (self, response) {
     const delay = retryDelay(self, null, response)
     self.debug('retrying', self.uri.href, response.statusCode, 'in', delay, 'ms')
     return setTimeout(function () {
-      runAttempt(self)
+      safeRunAttempt(self)
     }, delay)
   }
 

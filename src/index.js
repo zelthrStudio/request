@@ -88,10 +88,22 @@ request.cookie = function (str) {
 request.cache = require('./cache').defaultCache
 request.mock = require('./mock')
 
+// Clear global state (mocked handlers). Tests that registered mocks without
+// tracking them can reset here so a leaked mock never shapes later calls.
+request.reset = function () {
+  request.mock.reset()
+}
+
 // Promise interface: the Request is a thenable, but the explicit promise()
 // helper reads better and guarantees the response body is collected.
+// Construction may throw synchronously (invalid URI, EventEmitter rethrow
+// of an emitted 'error' with no listener); reject instead of crashing.
 request.promise = function (uri, options) {
-  return Promise.resolve(request(uri, options))
+  try {
+    return Promise.resolve(request(uri, options))
+  } catch (err) {
+    return Promise.reject(err)
+  }
 }
 
 const sleep = function (ms) {
@@ -241,7 +253,9 @@ request.defaults = function (options, requester) {
     defaults[verb] = wrapRequestMethod(self[verb], options, requester, verb)
   })
 
-  defaults.cookie = wrapRequestMethod(self.cookie, options, requester)
+  // `cookie` is a pure string parser: wrapping it like the request verbs
+  // would hand it the options object and always return null.
+  defaults.cookie = self.cookie
   defaults.jar = self.jar
   defaults.defaults = self.defaults
 

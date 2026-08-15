@@ -50,6 +50,14 @@ Redirect.prototype.redirectTo = function (response) {
     const location = response.headers.location
     request.debug('redirect', location)
 
+    // Some servers emit angle-bracketed Location values ('<http://x>').
+    // WHATWG URL parsing treats them as a relative path, silently sending
+    // the client to a garbage URL; treat them as no redirect instead.
+    if (/[<>]/.test(String(location))) {
+      request.debug('ignoring invalid redirect location', location)
+      return null
+    }
+
     if (self.followAllRedirects) {
       redirectTo = location
     } else if (self.followRedirects) {
@@ -98,7 +106,17 @@ Redirect.prototype.onResponse = function (response) {
   self.redirectsFollowed += 1
 
   const uriPrev = request.uri
-  request.uri = isUrl.test(redirectTo) ? new URL(redirectTo) : new URL(redirectTo, uriPrev.href)
+  let nextUri
+  try {
+    nextUri = isUrl.test(redirectTo) ? new URL(redirectTo) : new URL(redirectTo, uriPrev.href)
+  } catch (e) {
+    // A malformed Location must not crash the process through an unhandled
+    // promise rejection: surface it as a request error instead.
+    request.debug('invalid redirect location', redirectTo)
+    request.onRequestError(new Error('Invalid redirect location "' + redirectTo + '": ' + e.message))
+    return false
+  }
+  request.uri = nextUri
 
   // Handle the case where we change protocol from https to http or vice versa.
   if (request.uri.protocol !== uriPrev.protocol) {
@@ -112,6 +130,16 @@ Redirect.prototype.onResponse = function (response) {
   if (self.followAllRedirects && request.method !== 'HEAD' &&
     response.statusCode !== 401 && response.statusCode !== 307 && response.statusCode !== 308) {
     request.method = self.followOriginalHttpMethod ? request.method : 'GET'
+  }
+
+  // 307/308 preserve the method and body, but a streamed body (piped or
+  // written) has already been consumed by the first attempt: retrying would
+  // silently send an empty body. Fail loudly instead.
+  if ((response.statusCode === 307 || response.statusCode === 308) &&
+    (request.src || request._hasWrites)) {
+    request.onRequestError(new Error('Cannot follow a ' + response.statusCode +
+      ' redirect: the streamed request body has already been consumed'))
+    return false
   }
 
   delete request.src
@@ -144,7 +172,13 @@ Redirect.prototype.onResponse = function (response) {
   // different host is a credential-disclosure risk. Set removeRefererHeader
   // to suppress it entirely.
   if (!self.removeRefererHeader && request.uri.hostname === uriPrev.hostname) {
-    request.setHeader('referer', uriPrev.href)
+    // Credentials in the previous URL must not leak into the Referer, and a
+    // fragment is never part of the referent document.
+    const referer = new URL(uriPrev.href)
+    referer.username = ''
+    referer.password = ''
+    referer.hash = ''
+    request.setHeader('referer', referer.href)
   }
 
   request.emit('redirect')

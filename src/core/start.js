@@ -54,7 +54,15 @@ function startRequest (self) {
     }
   }
 
-  runAttempt(self)
+  safeRunAttempt(self)
+}
+
+// Kick off an attempt with a safety net: runAttempt() routes every failure
+// through onRequestError, but an 'error' emit with no listener rethrows
+// synchronously (EventEmitter), which would otherwise surface as an
+// unhandled promise rejection from this fire-and-forget call site.
+function safeRunAttempt (self) {
+  runAttempt(self).catch(function () {})
 }
 
 // One dispatch attempt. Retries (network errors) and status-based retries
@@ -82,7 +90,7 @@ async function runAttempt (self) {
     if (mocked) {
       const response = makeResponse(self, mocked)
       response.isMock = true
-      self.onRequestResponse(response)
+      await self.onRequestResponse(response)
       return
     }
 
@@ -93,7 +101,7 @@ async function runAttempt (self) {
       if (cached) {
         if (cached.fresh) {
           self._cacheHit = true
-          self.onRequestResponse(self._cache.serve(self, cached.entry))
+          await self.onRequestResponse(self._cache.serve(self, cached.entry))
           return
         }
         self._cache.applyRevalidation(self, cached)
@@ -111,13 +119,13 @@ async function runAttempt (self) {
       const delay = retryDelay(self, error, null)
       self.debug('retrying', self.uri.href, error.code || error.message, 'in', delay, 'ms')
       return setTimeout(function () {
-        runAttempt(self)
+        safeRunAttempt(self)
       }, delay)
     }
     return self.onRequestError(error)
   }
 
-  self.onRequestResponse(result)
+  await self.onRequestResponse(result)
 }
 
 function sendRequest (self) {
@@ -140,4 +148,4 @@ function handleRequestError (self, error) {
   self.emit('error', error)
 }
 
-module.exports = { startRequest, sendRequest, handleRequestError, runAttempt }
+module.exports = { startRequest, sendRequest, handleRequestError, runAttempt, safeRunAttempt }

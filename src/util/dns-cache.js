@@ -22,15 +22,20 @@ function createDnsCache (options) {
     const all = !!opts.all
     const key = hostname + '|' + family + '|' + (all ? 'a' : 'f')
     const hit = entries.get(key)
-    if (hit && (Date.now() - hit.at) < ttl) {
-      process.nextTick(function () {
-        if (all) {
-          cb(null, hit.addresses)
-        } else {
-          cb(null, hit.addresses[0].address, hit.addresses[0].family)
-        }
-      })
-      return
+    if (hit) {
+      if ((Date.now() - hit.at) < ttl) {
+        process.nextTick(function () {
+          if (all) {
+            cb(null, hit.addresses)
+          } else {
+            cb(null, hit.addresses[0].address, hit.addresses[0].family)
+          }
+        })
+        return
+      }
+      // TTL expired: drop the stale entry now (a DNS failover must not
+      // keep serving a stale IP) instead of only replacing it lazily.
+      entries.delete(key)
     }
 
     dns.lookup(hostname, { family, all: true }, function (err, addresses) {

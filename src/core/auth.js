@@ -83,6 +83,11 @@ Auth.prototype.digest = function (method, path, authHeader) {
   const nonceCount = qop && ((digestCounters.get(challenge.nonce) || 0) + 1)
   if (nonceCount) {
     digestCounters.set(challenge.nonce, nonceCount)
+    // A server rotating nonces per request must not leak an entry per
+    // nonce for the process lifetime; evict the oldest past the cap.
+    if (digestCounters.size > 1000) {
+      digestCounters.delete(digestCounters.keys().next().value)
+    }
   }
   const nc = qop && String(nonceCount).padStart(8, '0')
   const cnonce = qop && crypto.randomBytes(8).toString('hex')

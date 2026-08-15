@@ -79,7 +79,14 @@ const TWO_PART_PUBLIC_SUFFIXES = new Set([
   'com.lr', 'com.gn', 'com.cf', 'com.cg', 'com.ga', 'com.td',
   'com.so', 'com.dj', 'com.er', 'com.rw', 'com.bi', 'com.mg',
   'com.mu', 'com.sc', 'com.fj', 'com.pg', 'com.sb', 'com.ws',
-  'com.to', 'com.nu', 'com.ck', 'com.tv', 'com.pf', 'com.nc'
+  'com.to', 'com.nu', 'com.ck', 'com.tv', 'com.pf', 'com.nc',
+  // African co.* / or.* registrable zones.
+  'co.ke', 'or.ke', 'ne.ke', 'co.ug', 'or.ug', 'ne.ug', 'sc.ug',
+  'co.tz', 'or.tz', 'ne.tz', 'sc.tz', 'co.rw', 'co.bw', 'co.na',
+  'co.zm', 'co.zw', 'co.mw', 'co.mz', 'co.sz', 'co.ls', 'co.bi',
+  'co.ao', 'co.mg', 'co.mu', 'co.sc', 'co.sn', 'co.ci',
+  // Central-American registrable zones.
+  'co.cr', 'co.ni', 'co.sv', 'co.hn', 'co.gt', 'co.do', 'co.py', 'co.uy', 'co.ec'
 ])
 
 function pathMatches (requestPath, cookiePath) {
@@ -176,6 +183,15 @@ class CookieJar {
     this._cookies = []
   }
 
+  // Drop expired cookies so a server rotating cookie names (session tokens,
+  // per-request nonces) cannot grow the jar without bound.
+  _pruneExpired () {
+    const now = Date.now()
+    this._cookies = this._cookies.filter(function (cookie) {
+      return !(cookie.expires && cookie.expires.getTime() < now)
+    })
+  }
+
   setCookieSync (cookieOrStr, url) {
     const cookie = typeof cookieOrStr === 'string' ? parse(cookieOrStr) : cookieOrStr
     if (!cookie) {
@@ -233,6 +249,7 @@ class CookieJar {
   }
 
   getCookiesSync (url) {
+    this._pruneExpired()
     let uri
     try {
       uri = new URL(url)

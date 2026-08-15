@@ -79,7 +79,11 @@ function proxyRequestOptions (self) {
   options.hostname = proxy.hostname
   options.port = proxy.port || (proxy.protocol === 'https:' ? 443 : 80)
   options.protocol = proxy.protocol
-  options.path = self.uri.href
+  // Absolute-form request line. The target URL's credentials (user:pass@)
+  // must not be sent to the proxy, and the fragment is never part of the
+  // request.
+  options.path = self.uri.protocol + '//' + self.uri.host +
+    (self.uri.pathname + (self.uri.search || ''))
   return options
 }
 
@@ -113,6 +117,15 @@ function connectTunnel (self) {
     })
     req.on('error', reject)
     req.end()
+
+    // A proxy that accepts TCP but never answers CONNECT would otherwise
+    // leave the promise pending forever, regardless of `timeout` (the
+    // request timeout only kicks in after the tunnel is established).
+    if (self.timeout) {
+      req.setTimeout(self.timeout, function () {
+        req.destroy(makeTimeoutError(true))
+      })
+    }
 
     const signal = self._controller.signal
     if (signal.aborted) {

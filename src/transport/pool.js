@@ -19,9 +19,40 @@ const { closeSessions } = require('./http2')
 
 let defaultAgent = new http.Agent({ keepAlive: true, keepAliveMsecs: 1000 })
 const httpsAgents = new Map()
+const httpAgents = new Map()
 const proxyAgents = new Map()
 // Agents created from `pool: {...}`, `agentOptions` and `forever: {...}`.
 const customAgents = new Map()
+
+// Cap the per-signature agent maps: a per-tenant CA/client-cert pattern or
+// per-request `pool` options would otherwise grow agents (and their
+// keep-alive sockets) without bound. Evicted agents are dropped from the map
+// but not destroyed: idle sockets close themselves via the agent's
+// free-socket timer, and destroying a busy agent would kill in-flight
+// requests.
+const MAX_HTTPS_AGENTS = 100
+const MAX_HTTP_AGENTS = 50
+const MAX_PROXY_AGENTS = 50
+const MAX_CUSTOM_AGENTS = 50
+
+function lruSet (map, key, value, max) {
+  map.delete(key)
+  map.set(key, value)
+  while (map.size > max) {
+    map.delete(map.keys().next().value)
+  }
+}
+
+function lruGet (map, key) {
+  const value = map.get(key)
+  if (value !== undefined) {
+    // delete+set refreshes insertion order so the most recently used agent
+    // is not the first candidate for eviction.
+    map.delete(key)
+    map.set(key, value)
+  }
+  return value
+}
 
 // Explicit `pool`/`agentOptions`/`forever` settings (maxSockets, timeouts,
 // scheduling, ...) previously documented but silently ignored. Honor them
@@ -57,47 +88,60 @@ function getAgent (self) {
 
   const isHttps = self.uri.protocol === 'https:'
   const connect = connectOptions(self)
+  // The signature covers every socket-affecting option (TLS settings,
+  // localAddress, family and the `lookup` function), so a custom DNS
+  // resolver can never be silently bypassed by reusing a socket pooled by a
+  // request without it.
   const signature = connectSignature(self, connect)
 
   // 3. Explicit pool settings (maxSockets, agentOptions, forever): a
-  // dedicated agent per unique settings object.
+  // dedicated agent per unique settings + connect signature.
   const poolOptions = customPoolOptions(self)
   if (Object.keys(poolOptions).length > 0) {
-    const key = JSON.stringify(poolOptions)
-    let agent = customAgents.get(key)
+    const key = JSON.stringify(poolOptions) + '&' + signature
+    let agent = lruGet(customAgents, key)
     if (!agent) {
       const Agent = isHttps ? https.Agent : http.Agent
-      agent = new Agent(Object.assign({ keepAlive: true, keepAliveMsecs: 1000 }, poolOptions))
-      customAgents.set(key, agent)
+      agent = new Agent(Object.assign({ keepAlive: true, keepAliveMsecs: 1000 }, poolOptions, connect))
+      lruSet(customAgents, key, agent, MAX_CUSTOM_AGENTS)
     }
     return agent
   }
 
   // 4. HTTP through a proxy: pool the connection to the proxy itself.
   if (self.proxy && !isHttps) {
-    const key = self.proxy.href
-    let agent = proxyAgents.get(key)
+    const key = self.proxy.href + '|' + signature
+    let agent = lruGet(proxyAgents, key)
     if (!agent) {
-      agent = new http.Agent({ keepAlive: true, keepAliveMsecs: 1000 })
-      proxyAgents.set(key, agent)
+      agent = new http.Agent(Object.assign({ keepAlive: true, keepAliveMsecs: 1000 }, connect))
+      lruSet(proxyAgents, key, agent, MAX_PROXY_AGENTS)
     }
     return agent
   }
 
-  // 5. Plain http: the shared keep-alive agent.
+  // 5. Plain http: the shared keep-alive agent unless socket-affecting
+  // options (localAddress, family, lookup) require a dedicated pool.
   if (!isHttps) {
-    return defaultAgent
+    if (signature === '') {
+      return defaultAgent
+    }
+    let agent = lruGet(httpAgents, signature)
+    if (!agent) {
+      agent = new http.Agent(Object.assign({ keepAlive: true, keepAliveMsecs: 1000 }, connect))
+      lruSet(httpAgents, signature, agent, MAX_HTTP_AGENTS)
+    }
+    return agent
   }
 
-  // 6. https: an agent per TLS signature ('' for default TLS).
-  let agent = httpsAgents.get(signature)
+  // 6. https: an agent per TLS/connect signature ('' for default TLS).
+  let agent = lruGet(httpsAgents, signature)
   if (!agent) {
     const options = { keepAlive: true, keepAliveMsecs: 1000 }
     for (const key of Object.keys(connect)) {
       options[key] = connect[key]
     }
     agent = new https.Agent(options)
-    httpsAgents.set(signature, agent)
+    lruSet(httpsAgents, signature, agent, MAX_HTTPS_AGENTS)
   }
   return agent
 }
@@ -115,18 +159,12 @@ function closeDisposableAgent (self, destroy) {
 
 function closePool () {
   defaultAgent.destroy()
-  for (const agent of httpsAgents.values()) {
-    agent.destroy()
+  for (const map of [httpsAgents, httpAgents, proxyAgents, customAgents]) {
+    for (const agent of map.values()) {
+      agent.destroy()
+    }
+    map.clear()
   }
-  for (const agent of proxyAgents.values()) {
-    agent.destroy()
-  }
-  for (const agent of customAgents.values()) {
-    agent.destroy()
-  }
-  httpsAgents.clear()
-  proxyAgents.clear()
-  customAgents.clear()
   closeSessions()
   defaultAgent = new http.Agent({ keepAlive: true, keepAliveMsecs: 1000 })
 }

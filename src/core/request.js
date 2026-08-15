@@ -181,7 +181,10 @@ class Request extends stream.Duplex {
       return self
     }
 
-    self.uri = new URL(self.uri.href.split('?')[0] + '?' + qs)
+    // Set the search component directly so a URL fragment ('#...') is
+    // preserved and the query is not swallowed inside it.
+    self.uri = new URL(self.uri.href)
+    self.uri.search = qs
     self.url = self.uri
     self.path = self.uri.pathname + (self.uri.search || '')
 

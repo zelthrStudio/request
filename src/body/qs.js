@@ -27,9 +27,18 @@ function stringify (obj, options) {
   const eq = options.eq || '='
   const parts = []
 
-  const visit = function (prefix, value) {
+  // `ancestors` tracks the object graph currently being visited, so a
+  // circular reference raises a clear error instead of overflowing the
+  // call stack.
+  const visit = function (prefix, value, ancestors) {
     if (value === null || value === undefined) {
       return
+    }
+    if (typeof value === 'object') {
+      if (ancestors.has(value)) {
+        throw new TypeError('Cannot stringify a circular object at "' + prefix + '"')
+      }
+      ancestors.add(value)
     }
     if (Array.isArray(value)) {
       if (value.length === 0) {
@@ -37,8 +46,9 @@ function stringify (obj, options) {
         return
       }
       value.forEach(function (item, index) {
-        visit(prefix + '[' + index + ']', item)
+        visit(prefix + '[' + index + ']', item, ancestors)
       })
+      ancestors.delete(value)
       return
     }
     if (typeof value === 'object') {
@@ -48,15 +58,17 @@ function stringify (obj, options) {
         return
       }
       keys.forEach(function (key) {
-        visit(prefix + '[' + key + ']', value[key])
+        visit(prefix + '[' + key + ']', value[key], ancestors)
       })
+      ancestors.delete(value)
       return
     }
     parts.push(encode(prefix) + eq + encode(value))
   }
 
+  const ancestors = new Set()
   Object.keys(obj).forEach(function (key) {
-    visit(key, obj[key])
+    visit(key, obj[key], ancestors)
   })
   return parts.join(sep)
 }

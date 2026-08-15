@@ -323,7 +323,12 @@ function initRequest (self, options) {
       if (typeof self.body === 'string') {
         length = Buffer.byteLength(self.body)
       } else if (Array.isArray(self.body)) {
-        length = self.body.reduce(function (a, b) { return a + b.length }, 0)
+        // Buffers are counted in bytes; strings are encoded to UTF-8, so
+        // sum byte lengths (not UTF-16 code units) or a non-ASCII body
+        // would be truncated mid-character on the wire.
+        length = self.body.reduce(function (a, b) {
+          return a + (Buffer.isBuffer(b) ? b.length : Buffer.byteLength(String(b), 'utf8'))
+        }, 0)
       } else {
         length = self.body && self.body.length
       }

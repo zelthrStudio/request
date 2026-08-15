@@ -13,6 +13,15 @@ const { writeBody } = require('./body')
 // http/1.1); for http:, cleartext h2c (prior knowledge) is used.
 
 const sessions = new Map()
+// Sessions still mid-connection (TLS/ALPN): tracked separately so
+// closeSessions() can destroy them at shutdown.
+const pendingSessions = new Set()
+
+// Wall-clock budget for the whole connection phase (TCP + TLS + ALPN). The
+// socket-level connectTimeout only covers TCP; a server that accepts TCP
+// but never completes the handshake must not leave the connecting promise
+// (and every request queued behind it) pending forever.
+const CONNECT_WALL_CLOCK_TIMEOUT = 30000
 
 const forbiddenHeaders = ['connection', 'keep-alive', 'proxy-connection', 'transfer-encoding', 'upgrade', 'host', 'hostname']
 
@@ -51,22 +60,57 @@ function getSession (self) {
         }
       }
 
-      let session
+      let session = null
+      let settled = false
+      // An explicit request timeout also bounds the connection phase.
+      const connectBudget = self.timeout || CONNECT_WALL_CLOCK_TIMEOUT
+      const connectTimer = setTimeout(function () {
+        if (session) {
+          try {
+            session.destroy()
+          } catch (e) {}
+        }
+        finish(makeTimeoutError(true))
+      }, connectBudget)
+      const finish = function (err, result) {
+        if (settled) {
+          return
+        }
+        settled = true
+        clearTimeout(connectTimer)
+        if (err) {
+          reject(err)
+        } else {
+          resolve(result)
+        }
+      }
+
       try {
         session = http2.connect(self.uri.origin, options)
       } catch (err) {
+        clearTimeout(connectTimer)
         reject(err)
         return
       }
+      pendingSessions.add(session)
+      session.once('close', function () {
+        pendingSessions.delete(session)
+      })
 
-      session.once('error', function () {
+      session.once('error', function (err) {
         if (sessions.get(key) === session) {
           sessions.delete(key)
         }
+        finish(err)
       })
       session.once('close', function () {
         if (sessions.get(key) === session) {
           sessions.delete(key)
+        }
+        // A close with no preceding error (e.g. destroy before connect):
+        // settle the promise so waiters do not hang.
+        if (!settled) {
+          finish(new Error('HTTP/2 connection closed before it was established'))
         }
       })
 
@@ -75,15 +119,11 @@ function getSession (self) {
           // The server only speaks HTTP/1.1; close this session and fall back.
           session.close()
           sessions.delete(key)
-          resolve({ session: null, key, fallback: true })
+          finish(null, { session: null, key, fallback: true })
           return
         }
         sessions.set(key, session)
-        resolve({ session, key, fallback: false })
-      })
-
-      session.once('error', function (err) {
-        reject(err)
+        finish(null, { session, key, fallback: false })
       })
     })
 
@@ -189,6 +229,14 @@ function dispatchStream (self, session) {
 }
 
 function closeSessions () {
+  // Destroy sessions still mid-connection: they have no `.close` to await,
+  // and without a destroy the socket would leak at shutdown.
+  for (const session of pendingSessions) {
+    try {
+      session.destroy()
+    } catch (e) {}
+  }
+  pendingSessions.clear()
   for (const value of sessions.values()) {
     // The map may hold in-flight connect promises (no .close method).
     if (typeof value.close === 'function' && !value.closed && !value.destroyed) {

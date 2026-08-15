@@ -131,7 +131,12 @@ Multipart.prototype.build = function (parts, chunked) {
     }
     preamble += '\r\n'
     add(preamble)
-    body.push(part.body)
+    // Wrap string bodies in Buffers so the combined array is all-Buffer:
+    // the content-length computation then sums real UTF-8 byte counts
+    // instead of UTF-16 code units (which truncates non-ASCII bodies).
+    body.push(typeof part.body === 'string' || typeof part.body === 'number'
+      ? Buffer.from(String(part.body))
+      : part.body)
     add('\r\n')
   })
   add('--' + self.boundary + '--')

@@ -38,6 +38,11 @@ function clear () {
   handlers.length = 0
 }
 
+// Alias of clear(): the escape hatch for tests that registered mocks
+// without tracking them, so a leaked mock can never silently shape later
+// tests (or production calls).
+const reset = clear
+
 function enable () {
   enabled = true
 }
@@ -73,4 +78,4 @@ async function resolve (self) {
   return null
 }
 
-module.exports = { add, clear, enable, disable, resolve }
+module.exports = { add, clear, reset, enable, disable, resolve }

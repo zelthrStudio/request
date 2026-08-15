@@ -7,7 +7,10 @@
 
 const crypto = require('crypto')
 
-const connectKeys = ['ca', 'rejectUnauthorized', 'cert', 'key', 'pfx', 'passphrase', 'ciphers', 'secureProtocol', 'secureOptions', 'checkServerIdentity', 'localAddress', 'family']
+// `lookup` is part of the key so a custom DNS resolver (DNS pinning, SSRF
+// guards) is never silently bypassed by reusing a socket pooled by a request
+// without it.
+const connectKeys = ['ca', 'rejectUnauthorized', 'cert', 'key', 'pfx', 'passphrase', 'ciphers', 'secureProtocol', 'secureOptions', 'checkServerIdentity', 'localAddress', 'family', 'lookup']
 
 function connectOptions (self) {
   const options = {}
@@ -19,10 +22,20 @@ function connectOptions (self) {
   return options
 }
 
-// Stable ids for function-valued options (checkServerIdentity): two distinct
-// functions with the same arity must not collapse to the same pool key.
+// Stable ids for function-valued options (checkServerIdentity, lookup): two
+// distinct functions with the same arity must not collapse to the same pool
+// key.
 const fnIds = new WeakMap()
 let nextFnId = 0
+
+function fnId (fn) {
+  let id = fnIds.get(fn)
+  if (id === undefined) {
+    id = ++nextFnId
+    fnIds.set(fn, id)
+  }
+  return id
+}
 
 function hashValue (value) {
   if (Buffer.isBuffer(value)) {
@@ -45,12 +58,7 @@ function connectSignature (self, connect) {
   for (const key of keys) {
     let value = connect[key]
     if (typeof value === 'function') {
-      let id = fnIds.get(value)
-      if (id === undefined) {
-        id = ++nextFnId
-        fnIds.set(value, id)
-      }
-      value = 'fn:' + id
+      value = 'fn:' + fnId(value)
     } else if (Array.isArray(value)) {
       value = 'arr:[' + value.map(hashValue).join(',') + ']'
     } else {
@@ -61,4 +69,4 @@ function connectSignature (self, connect) {
   return parts.join('&')
 }
 
-module.exports = { connectOptions, connectSignature }
+module.exports = { connectOptions, connectSignature, fnId }

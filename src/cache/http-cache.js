@@ -59,7 +59,9 @@ class HttpCache {
     options = options || {}
     this.ttl = options.ttl || 60000
     this.maxEntries = options.maxEntries || 200
+    this.maxBytes = options.maxBytes || 64 * 1024 * 1024
     this._entries = new Map()
+    this._bytes = 0
   }
 
   // Look up a stored entry for this request. Returns null on a miss, or
@@ -109,17 +111,22 @@ class HttpCache {
   }
 
   // Store a completed GET response. Returns nothing; silently skips
-  // responses that must not be cached.
+  // responses that must not be cached. Cookie-scoped and `private`
+  // responses are never stored: the shared cache would otherwise serve one
+  // user's session data to other requests for the same URL.
   store (self, response, body) {
     if (self.method !== 'GET') {
       return
     }
     const statusCode = response.statusCode
     const cacheControl = parseCacheControl(response.headers['cache-control'])
-    if (cacheControl['no-store']) {
+    if (cacheControl['no-store'] || cacheControl.private === true) {
       return
     }
     if (!DEFAULT_CACHEABLE.has(statusCode) && cacheControl.public !== true) {
+      return
+    }
+    if (self.hasHeader('cookie') && cacheControl.public !== true) {
       return
     }
     if (self.hasHeader('authorization') && cacheControl.public !== true) {
@@ -153,7 +160,11 @@ class HttpCache {
       }
     }
     const variants = this._entries.get(self.uri.href) || []
+    // delete-then-set refreshes insertion order, so repeatedly refreshed
+    // URLs are not the first candidates for eviction (LRU-ish behavior).
+    this._entries.delete(self.uri.href)
     this._entries.set(self.uri.href, variants.concat(entry))
+    this._bytes += body.length
     this._evict()
   }
 
@@ -174,26 +185,37 @@ class HttpCache {
           continue
         }
         // A 304 response carries its own content-length (usually 0); the
-        // stored entry's body length is authoritative and must win.
+        // stored entry's body length is authoritative and must win. The
+        // validators (etag / last-modified) are never overwritten either:
+        // a 304 has no fresh validators, and losing them would turn every
+        // future revalidation into a full 200.
         if (name.toLowerCase() === 'content-length') {
           continue
         }
         entry.headers[name] = response.headers[name]
       }
+      // Refresh the insertion order so this URL is not evicted first.
+      const variants = this._entries.get(self.uri.href)
+      this._entries.delete(self.uri.href)
+      this._entries.set(self.uri.href, variants)
       return entry
     }
     return null
   }
 
-  // Keep the store under maxEntries by evicting from the oldest URL.
+  // Keep the store under maxEntries and maxBytes by evicting from the
+  // least-recently-used URL.
   _evict () {
-    while (this.size > this.maxEntries) {
+    while (this.size > this.maxEntries || this._bytes > this.maxBytes) {
       const first = this._entries.keys().next().value
       if (first === undefined) {
         return
       }
       const variants = this._entries.get(first)
-      variants.shift()
+      const removed = variants.shift()
+      if (removed) {
+        this._bytes -= removed.body.length
+      }
       if (variants.length === 0) {
         this._entries.delete(first)
       }
@@ -232,6 +254,7 @@ class HttpCache {
 
   clear () {
     this._entries.clear()
+    this._bytes = 0
   }
 
   get size () {
