@@ -262,7 +262,12 @@ function initRequest (self, options) {
     )
   }
 
-  if (self.gzip && !self.hasHeader('accept-encoding')) {
+  // With gzip handling on, the advertised encodings must match what this
+  // package can decode. A manual accept-encoding may advertise `br` (or
+  // anything else) that gzip decoding cannot handle, silently yielding a
+  // raw compressed body; override it so the server can only send gzip
+  // (or deflate/br, which are decoded) unless gzip is off.
+  if (self.gzip) {
     // `brotli: true` additionally advertises and decodes Brotli responses.
     self.setHeader('accept-encoding', self.brotli ? 'gzip, deflate, br' : 'gzip, deflate')
   }

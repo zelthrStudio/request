@@ -4,7 +4,7 @@
 
 const http = require('http')
 const https = require('https')
-const { connectOptions, connectSignature } = require('./tls')
+const { connectOptions, connectSignature, stableValue } = require('./tls')
 const { closeSessions } = require('./http2')
 
 // Connection pooling with Node's http/https agents.
@@ -113,10 +113,12 @@ function getAgent (self) {
   const signature = connectSignature(self, connect)
 
   // 3. Explicit pool settings (maxSockets, agentOptions, forever): a
-  // dedicated agent per unique settings + connect signature.
+  // dedicated agent per unique settings + connect signature. The key uses
+  // a stable serialization (not JSON.stringify): function-valued options
+  // (createConnection, lookup, ...) must not collapse onto one key.
   const poolOptions = customPoolOptions(self)
   if (Object.keys(poolOptions).length > 0) {
-    const key = JSON.stringify(poolOptions) + '&' + signature
+    const key = stableValue(poolOptions) + '&' + signature
     let agent = lruGet(customAgents, key)
     if (!agent) {
       const Agent = isHttps ? https.Agent : http.Agent

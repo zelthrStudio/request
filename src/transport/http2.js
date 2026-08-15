@@ -48,7 +48,18 @@ function getSession (self) {
     }
 
     const connecting = new Promise(function (resolve, reject) {
-      const options = { connectTimeout: 10000 }
+      // The socket-level connectTimeout covers the TCP phase. The default
+      // 10s must not outlive the caller's own budgets: a tight `timeout` or
+      // `http2ConnectTimeout` wins, so a request that would time out anyway
+      // fails with a connect-specific error instead of a generic one.
+      let connectTimeout = 10000
+      if (self.http2ConnectTimeout !== undefined) {
+        connectTimeout = Math.min(connectTimeout, self.http2ConnectTimeout)
+      }
+      if (self.timeout !== undefined) {
+        connectTimeout = Math.min(connectTimeout, self.timeout)
+      }
+      const options = { connectTimeout }
       if (self.lookup) {
         options.lookup = self.lookup
       }

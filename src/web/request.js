@@ -56,7 +56,16 @@ const UNSUPPORTED_OPTIONS = [
   'ciphers',
   'secureProtocol',
   'secureOptions',
-  'checkServerIdentity'
+  'checkServerIdentity',
+  // Compression control beyond fetch's transparent handling: fetch always
+  // advertises and decompresses br, so `brotli: false` cannot be honored.
+  'brotli',
+  // Redirect referer control and JSON/query serialization knobs the
+  // fetch-based build has no hook into.
+  'removeRefererHeader',
+  'jsonReplacer',
+  'useQuerystring',
+  'qsParseOptions'
 ]
 
 // In-flight request coalescing (`dedupe: true`). Web responses are
@@ -673,6 +682,16 @@ function mapFetchError (err) {
 // Buffer a response body with a size budget, honoring the caller's
 // encoding. Returns a string (decoded) or a Uint8Array when
 // encoding === null.
+// Decode a buffered body honoring the caller's encoding. TextDecoder only
+// knows the WHATWG labels; map the common legacy aliases onto them so
+// `encoding: 'latin1'` does not throw a RangeError.
+const ENCODING_ALIASES = {
+  latin1: 'windows-1252',
+  'iso-8859-1': 'windows-1252',
+  'iso8859-1': 'windows-1252',
+  ascii: 'windows-1252'
+}
+
 async function readBody (self, fetchResponse) {
   if (self.method === 'HEAD' || fetchResponse.status === 204 || fetchResponse.status === 304) {
     return self.encoding === null ? new Uint8Array(0) : ''
@@ -709,15 +728,23 @@ async function readBody (self, fetchResponse) {
   if (self.encoding === null) {
     return bytes
   }
-  let text = new TextDecoder(self.encoding === 'utf8' ? 'utf-8' : self.encoding).decode(bytes)
-  if (self.encoding === 'utf8' && text.charCodeAt(0) === 0xFEFF) {
+  const isUtf8 = self.encoding === 'utf8' || self.encoding === 'utf-8'
+  const label = isUtf8 ? 'utf-8' : (ENCODING_ALIASES[self.encoding] || self.encoding)
+  let text = new TextDecoder(label).decode(bytes)
+  // Strip the UTF-8 BOM (0xFEFF in the decoded string): upstream consumers
+  // don't expect it and it breaks JSON.parse().
+  if (isUtf8 && text.charCodeAt(0) === 0xFEFF) {
     text = text.slice(1)
   }
   if (self._json) {
-    try {
-      return JSON.parse(text)
-    } catch (e) {
-      return text
+    if (typeof text === 'string' && text !== '') {
+      try {
+        return JSON.parse(text)
+      } catch (e) {
+        const err = new Error('Invalid JSON response from ' + self.uri.href + ': ' + e.message)
+        err.code = 'EJSONPARSE'
+        throw err
+      }
     }
   }
   return text
@@ -735,8 +762,28 @@ function concatBytes (chunks, total) {
 
 // --- Deduplication ---------------------------------------------------------
 
+// Credential headers that must split the coalescing key: two concurrent
+// requests to the same URL with different auth/cookies must not share one
+// network request. Values are embedded verbatim (no crypto available in
+// edge runtimes; the key only lives in an in-memory Map).
+const DEDUPE_CREDENTIAL_HEADERS = ['authorization', 'cookie']
+
+function dedupeKey (self) {
+  let key = self.method + ' ' + self.uri.href
+  const parts = []
+  for (const name of Object.keys(self.headers)) {
+    if (DEDUPE_CREDENTIAL_HEADERS.indexOf(name.toLowerCase()) !== -1) {
+      parts.push(name.toLowerCase() + '=' + String(self.headers[name]))
+    }
+  }
+  if (parts.length > 0) {
+    key += '&' + parts.sort().join('&')
+  }
+  return key
+}
+
 function dedupeAcquire (self) {
-  const key = self.method + ' ' + self.uri.href
+  const key = dedupeKey(self)
   const existing = inFlight.get(key)
   if (existing) {
     existing.waiters.push(self)

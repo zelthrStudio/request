@@ -126,6 +126,9 @@ async function handleRequestResponse (self, response) {
       response = self._cache.serve(self, entry)
       response.revalidated = true
       self.response = response
+      // The served body must not be re-stored as a fresh entry (it would
+      // duplicate the refreshed variant on every revalidation).
+      self._cacheChunks = null
       if (self._progress && self._progress.total === null) {
         const len = response.headers['content-length']
         if (len !== undefined) {
@@ -330,18 +333,28 @@ function handleResponseEnd (self) {
       body = self.encoding === null ? buf : buf.toString(self.encoding || 'utf8')
       // The UTF8 BOM [0xEF,0xBB,0xBF] is converted to [0xFE,0xFF] in the JS
       // UTC16/UCS2 representation. Strip this value out when the encoding is
-      // set to 'utf8', as upstream consumers won't expect it and it breaks
-      // JSON.parse().
-      if (self.encoding === 'utf8' && typeof body === 'string' && body.charCodeAt(0) === 0xFEFF) {
+      // set to a UTF-8 alias ('utf8' or 'utf-8'), as upstream consumers
+      // won't expect it and it breaks JSON.parse().
+      const isUtf8 = self.encoding === 'utf8' || self.encoding === 'utf-8'
+      if (isUtf8 && typeof body === 'string' && body.charCodeAt(0) === 0xFEFF) {
         body = body.slice(1)
       }
     }
 
     if (self._json) {
-      try {
-        body = JSON.parse(body)
-      } catch (e) {
-        self.debug('invalid JSON received', self.uri.href)
+      // `json: true` promises a parsed object; a non-JSON payload must not
+      // silently degrade into a raw string that callers will misread as a
+      // successful parse.
+      if (typeof body === 'string' && body !== '') {
+        try {
+          body = JSON.parse(body)
+        } catch (e) {
+          const err = new Error('Invalid JSON response from ' + self.uri.href + ': ' + e.message)
+          err.code = 'EJSONPARSE'
+          self.debug('invalid JSON received', self.uri.href)
+          self.onRequestError(err)
+          return
+        }
       }
     }
 

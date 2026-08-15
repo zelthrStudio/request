@@ -129,6 +129,9 @@ function cbState (self) {
 // A token bucket per host: `capacity` tokens may be spent at once (burst),
 // then tokens refill at `rate` per second. Waiters re-check the bucket
 // after each refill so concurrent callers cannot over-issue.
+// A non-positive rate or capacity is a configuration bug, not "no limit":
+// with rate 0 (or capacity 0) tokens would never refill and every request
+// would wait forever. Reject such values loudly instead of hanging.
 function normalizeRateLimit (value) {
   if (!value) {
     return null
@@ -137,12 +140,21 @@ function normalizeRateLimit (value) {
     return { rate: 10, capacity: 10 }
   }
   if (typeof value === 'number') {
+    // Falsy numbers (0/NaN) disable the limiter, matching `false`.
+    if (!(value > 0) || !Number.isFinite(value)) {
+      return null
+    }
     return { rate: value, capacity: value }
   }
-  return {
-    rate: value.rate === undefined ? 10 : value.rate,
-    capacity: value.capacity === undefined ? (value.rate === undefined ? 10 : value.rate) : value.capacity
+  const rate = value.rate === undefined ? 10 : value.rate
+  const capacity = value.capacity === undefined ? (value.rate === undefined ? 10 : value.rate) : value.capacity
+  if (typeof rate !== 'number' || !(rate > 0) || !Number.isFinite(rate)) {
+    throw new Error('options.rateLimit.rate must be a positive finite number')
   }
+  if (typeof capacity !== 'number' || !(capacity >= 1) || !Number.isFinite(capacity)) {
+    throw new Error('options.rateLimit.capacity must be a finite number of at least 1')
+  }
+  return { rate, capacity }
 }
 
 // Resolves once a token is available (immediately while the burst allows

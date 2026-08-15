@@ -87,7 +87,7 @@ request({
 | `qs` | Object of query-string values added to the URI. |
 | `headers` | HTTP request headers. |
 | `body` | Request body: string, `Buffer`, array, Node `Readable`, web `ReadableStream`, or async iterable. |
-| `json` | `true` to send/parse JSON, or an object/string to serialize. |
+| `json` | `true` to send/parse JSON, or an object/string to serialize. An invalid JSON response rejects with `code: 'EJSONPARSE'`. |
 | `form` | Object/string encoded as `application/x-www-form-urlencoded`. |
 | `multipart` | Array of multipart parts (see [Forms](#forms)). |
 | `auth` | `{ user, pass, sendImmediately, bearer }` for basic/bearer auth. |
@@ -100,7 +100,7 @@ request({
 | `dnsCache` | DNS result cache: `true` (shared), `{ ttl, max }`, or a custom `lookup` function. |
 | `lookup` | Custom DNS lookup function passed to the transport. |
 | `progress` | `true` to emit `progress` events while uploading/downloading. |
-| `mock` | Mock this request: a `{ statusCode, headers, body }` spec or a function returning one (or `null` to pass through). |
+| `mock` | Mock this request: a `{ statusCode, headers, body }` spec or a function returning one (or `null` to pass through). The body must be a string, `Buffer`, or stream. |
 | `timeout` | Timeout in milliseconds (headers + body idle). |
 | `jar` | Cookie jar (from `request.jar()`) to persist cookies across requests. |
 | `proxy` | Proxy URL; also read from `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` env vars. |
@@ -320,7 +320,9 @@ single network request; every waiter receives its own copy of the
 buffered response (`response.fromDedupe === true` on the waiters). This
 is the SWR/React Query pattern for server-side callers. Only idempotent
 methods are ever coalesced, and the primary's `timeout` governs the
-shared attempt.
+shared attempt. Two requests with different `Authorization` or `Cookie`
+headers are never coalesced — credentials are part of the coalescing key,
+so one caller's response can never be replayed to another.
 
 ```js
 const [a, b] = await Promise.all([
@@ -375,6 +377,9 @@ request({
 ```
 
 `rateLimit: true` defaults to 10 req/s (burst 10); a number sets both.
+Non-positive rates and capacities are configuration errors and are
+rejected loudly at construction (a token bucket that never refills would
+hang every request); `rateLimit: 0` disables the limiter.
 
 ## Pagination
 
@@ -624,16 +629,18 @@ Differences from the main package (all documented limitations):
   with `code: 'ETIMEDOUT'`.
 - Network failures reject with `code: 'ENETWORK'` (the underlying fetch
   error is attached as `cause`).
-- `gzip`/`brotli` are no-ops — fetch advertises `accept-encoding` and
-  decompresses transparently.
+- `gzip` is a no-op — fetch advertises `accept-encoding` and decompresses
+  transparently (gzip and `br` are both decoded by the platform).
 - Options this entry cannot honor are **rejected with `code: 'EUNSUPPORTED'`**
   instead of being silently ignored (so a caller migrating from the Node
   client never gets different behavior without noticing): `retry`,
   `jar`/cookies, `proxy`, `cache`, `mock`, `paginate`, `streaming`,
   `http2`/TLS options, `forever`/`pool`/`agent`, `progress`, DNS options,
-  and plain-object `formData` (pass a `FormData` instance instead). Cookies
-  are handled by the platform (undici/Cloudflare), and proxies are
-  typically rewrites in middleware.
+  `brotli` (fetch always advertises and decodes `br`, so `brotli: false`
+  cannot be honored), `removeRefererHeader`, `jsonReplacer`,
+  `useQuerystring`/`qsParseOptions`, and plain-object `formData` (pass a
+  `FormData` instance instead). Cookies are handled by the platform
+  (undici/Cloudflare), and proxies are typically rewrites in middleware.
 
 ## Framework integrations
 

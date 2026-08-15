@@ -336,7 +336,7 @@ test('web: defaults merge options and verbs work', async function (t) {
 test('web: json bodies are sent and content-type set', async function (t) {
   const server = await createServer(async function (req, res) {
     const body = await readBody(req)
-    res.end(body + '|' + req.headers['content-type'])
+    res.end(JSON.stringify({ echo: body, contentType: req.headers['content-type'] }))
   })
   t.after(() => closeServer(server))
 
@@ -345,5 +345,5 @@ test('web: json bodies are sent and content-type set', async function (t) {
     method: 'POST',
     json: { hello: 'world' }
   })
-  assert.strictEqual(response.body, '{"hello":"world"}|application/json')
+  assert.deepStrictEqual(response.body, { echo: '{"hello":"world"}', contentType: 'application/json' })
 })

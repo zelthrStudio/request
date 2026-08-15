@@ -1,5 +1,74 @@
 # Change Log
 
+## [1.5.0] — 2026-08-16 — audit pass 4: dedupe credentials, rate-limit validation, JSON parse errors
+
+### Fixed
+
+- **Response mixup (HIGH, H-1):** the dedupe key ignored request headers, so
+  concurrent GETs to the same URL with *different* `Authorization` or
+  `Cookie` values were coalesced onto one network request — the primary's
+  response (session data, per-request nonces) was replayed to every waiter.
+  The coalescing key now includes a hash of the credential headers (both
+  Node and web/Edge entries).
+- **Permanent hang (HIGH, H-5):** `rateLimit: { rate: 0 }` (or a non-positive
+  `capacity`) created a token bucket that could never refill, so every
+  request waited forever. Non-positive/non-finite rates and capacities are
+  now rejected loudly at construction; a falsy `rateLimit: 0` still
+  disables the limiter.
+- **Agent key collapse (MEDIUM, M-1):** agents built from
+  `pool`/`agentOptions`/`forever` were keyed with `JSON.stringify`, which
+  drops function values — two different `createConnection`/`lookup`
+  functions collapsed onto one agent (and key order split otherwise
+  identical ones). Pool keys now use a stable serialization that keeps
+  function identity and ignores key order.
+- **Unbounded cookie jar (MEDIUM, M-3):** session cookies never expire, so
+  a server rotating cookie names could grow the jar without bound. Jars are
+  now capped at 1000 cookies; the oldest is dropped on overflow.
+- **Web encoding throw (MEDIUM, M-7):** `encoding: 'latin1'` threw a
+  `RangeError` in the web/Edge entry (`TextDecoder` only knows the WHATWG
+  labels). Legacy aliases (`latin1`, `iso-8859-1`, `ascii`) are now mapped
+  onto `windows-1252`.
+- **Silent option drop (MEDIUM, M-8):** the web/Edge entry now throws
+  `EUNSUPPORTED` for `brotli` (fetch always advertises and decodes `br`, so
+  `brotli: false` cannot be honored), `removeRefererHeader`, `jsonReplacer`,
+  `useQuerystring` and `qsParseOptions`, which were previously documented
+  but silently ignored.
+- **Silent string body (MEDIUM, M-9):** `json: true` with a non-JSON
+  response silently degraded into a raw string, which callers reading
+  `typeof body === 'object'` mis-took for a successful parse. Parse
+  failures now fail the request with `code: 'EJSONPARSE'` (both entries).
+- **Never-expiring cookie (MEDIUM, M-10):** an unparseable
+  `Max-Age=abc` became a cookie that never expires (the jar kept it
+  forever). Such cookies are now dropped instead of stored.
+- **Pagination crash (MEDIUM, M-11):** a non-string `body.next` (e.g. an
+  object from a sloppy API) crashed the pagination generator with a
+  `TypeError` from `new URL()`. Scalars are coerced; objects/arrays end the
+  pagination.
+- **HTTP/2 connect budget (MEDIUM, M-12):** the HTTP/2 TCP connect timeout
+  was hardcoded at 10s regardless of the request's own `timeout` or
+  `http2ConnectTimeout`. It is now derived as `min(10s, timeout,
+  http2ConnectTimeout)`, so a request that would time out anyway fails with
+  a connect-specific error.
+- **BOM alias (LOW, L-1):** the UTF-8 BOM was only stripped for
+  `encoding: 'utf8'`; the `'utf-8'` spelling left the BOM in the body and
+  broke `JSON.parse()` with `json: true`. Both aliases are now handled
+  (Node and web/Edge entries).
+- **Raw br body (LOW, L-2):** a manual `accept-encoding` header combined
+  with `gzip: true` could advertise `br` that the decoder cannot handle,
+  silently yielding a raw compressed body. With gzip handling on, the
+  advertised encodings are now always derived from `brotli`.
+- **Silent empty mock body (LOW, L-3):** a mock spec with a plain-object
+  (or otherwise unsupported) body silently served an empty body. It now
+  fails loudly with "mock response body must be a string, Buffer, or
+  stream".
+- **Cache duplication (LOW, finding 3):** every 304 revalidation stored the
+  served body again, duplicating the cache entry for the URL. The
+  revalidated body is no longer re-stored.
+- **Unbounded dedupe map (LOW, L-8):** the in-flight coalescing map had no
+  bound; a hung primary pinned its entry forever. It is now capped at 1000
+  entries (oldest evicted; the evicted primary still delivers to its
+  attached waiters).
+
 ## [1.4.0] — 2026-08-16 — audit pass 3: redirect credential leak, pool lifecycle, retry safety
 
 ### Fixed

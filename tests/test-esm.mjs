@@ -28,7 +28,7 @@ test('ESM import performs real requests', async function (t) {
     await closeServer(server)
   })
 
-  const response = await promise('http://127.0.0.1:' + server.port + '/', { json: true })
+  const response = await promise('http://127.0.0.1:' + server.port + '/')
   assert.strictEqual(response.statusCode, 200)
   assert.strictEqual(response.body, 'esm hello')
 

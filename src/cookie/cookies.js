@@ -177,6 +177,11 @@ function parse (str) {
   return cookie
 }
 
+// Upper bound on cookies stored in one jar. Session cookies never expire,
+// so an adversarial server could otherwise grow memory without bound; the
+// oldest stored cookie is dropped when the cap is exceeded.
+const MAX_COOKIES = 1000
+
 // A memory-backed jar with the sync API of a tough-cookie CookieJar.
 class CookieJar {
   constructor () {
@@ -190,6 +195,15 @@ class CookieJar {
     this._cookies = this._cookies.filter(function (cookie) {
       return !(cookie.expires && cookie.expires.getTime() < now)
     })
+  }
+
+  // Keep the jar bounded: a server can keep setting fresh session cookies
+  // forever (they never expire, so pruning alone cannot bound the jar).
+  // When the cap is hit the oldest stored cookie is dropped.
+  _enforceCap () {
+    if (this._cookies.length > MAX_COOKIES) {
+      this._cookies.splice(0, this._cookies.length - MAX_COOKIES)
+    }
   }
 
   setCookieSync (cookieOrStr, url) {
@@ -231,6 +245,12 @@ class CookieJar {
     if (!cookie.path) {
       cookie.path = defaultPath(uri.pathname)
     }
+    // An unparseable Max-Age (e.g. "Max-Age=abc") is not a session cookie:
+    // the server clearly wanted an expiry it could not express. Keeping it
+    // forever would poison the jar; drop it instead.
+    if (cookie.maxAge !== null && isNaN(cookie.maxAge)) {
+      return
+    }
     if (cookie.maxAge !== null && !isNaN(cookie.maxAge)) {
       cookie.expires = new Date(Date.now() + cookie.maxAge * 1000)
     }
@@ -246,6 +266,7 @@ class CookieJar {
       return !(c.key === cookie.key && c.domain === cookie.domain && c.path === cookie.path)
     })
     this._cookies.push(cookie)
+    this._enforceCap()
   }
 
   getCookiesSync (url) {

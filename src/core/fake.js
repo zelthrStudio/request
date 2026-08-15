@@ -11,7 +11,7 @@ const { responseToJSON } = require('../util').serialization
 // RFC 7234 cache when serving a stored response without touching the network.
 function makeResponse (self, spec) {
   let body = spec.body
-  if (body === undefined) {
+  if (body === undefined || body === null) {
     body = ''
   }
   let response
@@ -27,11 +27,11 @@ function makeResponse (self, spec) {
   } else if (typeof body.pipe === 'function') {
     response = body
   } else {
-    response = new stream.Readable({
-      read: function () {
-        this.push(null)
-      }
-    })
+    // A mock body must be a replayable value. A plain object (e.g. a
+    // handler that returns `{ body: { foo: 1 } }`) would otherwise become
+    // a silently empty body; fail loudly so the mismatch is caught where
+    // the mock is defined.
+    throw new Error('mock response body must be a string, Buffer, or stream (got ' + (body === null ? 'null' : typeof body) + ')')
   }
   response.statusCode = spec.statusCode !== undefined ? spec.statusCode : 200
   response.headers = spec.headers || {}

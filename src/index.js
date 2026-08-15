@@ -124,8 +124,18 @@ function defaultNextUrl (response, currentUrl) {
     }
   }
   const body = response.body
+  // body.next may be any JSON type; a non-string value must not crash the
+  // generator with a TypeError from new URL(). Scalars are coerced; objects
+  // and arrays (no meaningful URL) end the pagination.
   if (body && typeof body === 'object' && !Buffer.isBuffer(body) && body.next) {
-    return new URL(String(body.next), currentUrl).href
+    const nextValue = body.next
+    if (typeof nextValue === 'string' || typeof nextValue === 'number' || typeof nextValue === 'boolean') {
+      try {
+        return new URL(String(nextValue), currentUrl).href
+      } catch (e) {
+        return null
+      }
+    }
   }
   return null
 }

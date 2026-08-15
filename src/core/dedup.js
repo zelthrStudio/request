@@ -9,6 +9,8 @@
 // (collect mode) so each waiter receives its own copy, which also means
 // `timeout` on a deduped request is governed by the primary's timer.
 
+const crypto = require('crypto')
+
 const { makeResponse } = require('./fake')
 
 // Wire-level headers describing the primary's transport representation;
@@ -21,7 +23,36 @@ const STRIP_HEADERS = new Set([
   'keep-alive'
 ])
 
+// Headers that change the meaning of a response: two concurrent requests to
+// the same URL with different credentials must not share one network
+// request, or the primary's response (session data, per-request nonces)
+// would leak to the other caller.
+const CREDENTIAL_HEADERS = ['authorization', 'cookie']
+
 const inFlight = new Map()
+
+// Upper bound on the coalescing table. A primary that hangs (or a workload
+// that touches many URLs) must not pin entries forever; when the map
+// overflows, the oldest entry is dropped so a later request for that URL
+// simply starts its own primary. The evicted primary still delivers to the
+// waiters already attached to it.
+const MAX_IN_FLIGHT = 1000
+
+// The coalescing key: method + URL, plus the credential headers when
+// present. Hashing keeps tokens out of the key string.
+function dedupeKey (self) {
+  let key = self.method + ' ' + self.uri.href
+  const parts = []
+  for (const name of Object.keys(self.headers)) {
+    if (CREDENTIAL_HEADERS.indexOf(name.toLowerCase()) !== -1) {
+      parts.push(name.toLowerCase() + '=' + String(self.headers[name]))
+    }
+  }
+  if (parts.length > 0) {
+    key += '&h=' + crypto.createHash('sha256').update(parts.sort().join('&')).digest('hex')
+  }
+  return key
+}
 
 // Returns true when the request attached to an existing in-flight request
 // (the primary will deliver the result), false when it should proceed as
@@ -34,7 +65,7 @@ function acquire (self) {
   if (method !== 'GET' && method !== 'HEAD') {
     return false
   }
-  const key = method + ' ' + self.uri.href
+  const key = dedupeKey(self)
   const existing = inFlight.get(key)
   if (existing) {
     if (self._aborted) {
@@ -56,6 +87,9 @@ function acquire (self) {
   self._chunks = self._chunks || []
   const entry = { primary: self, waiters: [] }
   inFlight.set(key, entry)
+  if (inFlight.size > MAX_IN_FLIGHT) {
+    inFlight.delete(inFlight.keys().next().value)
+  }
   self.once('complete', function () {
     if (inFlight.get(key) === entry) {
       inFlight.delete(key)
@@ -109,4 +143,6 @@ function fail (entry, err) {
   }
 }
 
-module.exports = { acquire }
+// The map is exported for tests (this module is internal, not part of the
+// public API) so the bounded-size behavior can be verified directly.
+module.exports = { acquire, inFlight }

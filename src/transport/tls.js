@@ -80,4 +80,27 @@ function connectSignature (self, connect) {
   return parts.join('&')
 }
 
-module.exports = { connectOptions, connectSignature, fnId }
+// A stable serialization of an arbitrary options object: distinct functions
+// keep distinct identities, Buffers are hashed once, and key order does not
+// matter. Unlike JSON.stringify this never collapses two different function
+// values onto the same key (JSON.stringify drops functions entirely).
+function stableValue (value) {
+  if (typeof value === 'function') {
+    return 'fn:' + fnId(value)
+  }
+  if (Buffer.isBuffer(value)) {
+    return hashValue(value)
+  }
+  if (Array.isArray(value)) {
+    return 'arr:[' + value.map(stableValue).join(',') + ']'
+  }
+  if (value !== null && typeof value === 'object') {
+    const keys = Object.keys(value).sort()
+    return '{' + keys.map(function (key) {
+      return key + '=' + stableValue(value[key])
+    }).join(',') + '}'
+  }
+  return 'str:' + crypto.createHash('sha256').update(String(value)).digest('hex')
+}
+
+module.exports = { connectOptions, connectSignature, stableValue, fnId }
