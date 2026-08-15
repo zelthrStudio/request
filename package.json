@@ -15,6 +15,10 @@
   ],
   "license": "Apache-2.0",
   "author": "zelthrStudio",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zelthrStudio/request.git"
+  },
   "engines": {
     "node": ">= 18"
   },
