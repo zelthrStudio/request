@@ -126,8 +126,10 @@ request.paginate = async function * (uri, options) {
   const filter = typeof pagination.filter === 'function' ? pagination.filter : null
   const shouldContinue = typeof pagination.shouldContinue === 'function' ? pagination.shouldContinue : null
   const nextUrl = typeof pagination.nextUrl === 'function' ? pagination.nextUrl : defaultNextUrl
-  const countLimit = pagination.countLimit || Infinity
-  const requestLimit = pagination.requestLimit || Infinity
+  // Safety caps against runaway pagination (malicious/looping `next` links):
+  // raise them via the paginate options when a legitimate job needs more.
+  const countLimit = pagination.countLimit || 1000
+  const requestLimit = pagination.requestLimit || 100
   const backoff = pagination.backoff || 0
 
   let currentUrl = uri

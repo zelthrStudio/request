@@ -1,5 +1,30 @@
 # Change Log
 
+## [Unreleased] — security hardening
+
+### Fixed
+
+- **Security: prototype pollution in the query-string parser** (`qs.parse`).
+  Keys whose bracket path touches `__proto__`, `constructor` or `prototype`
+  (at any nesting depth, including percent-encoded forms) are now skipped,
+  so untrusted query strings can no longer mutate `Object.prototype`.
+- **Security: redirects no longer leak the previous URL cross-host.** The
+  `Referer` header is only forwarded when the redirect target keeps the same
+  hostname — query secrets / signed tokens in the original URL are no longer
+  disclosed to third-party hosts. `removeRefererHeader: true` still
+  suppresses it entirely.
+- **Security: response bodies can now be capped.** New `maxBytes` option —
+  when the collected body exceeds the limit the request aborts with an
+  `EBODYLIMIT` error instead of buffering unbounded data (zip-bomb / runaway
+  server protection).
+- **Security: `toJSON()` no longer serializes credentials.** `requestToJSON`
+  / `responseToJSON` strip `authorization`, `proxy-authorization`, `cookie`,
+  `set-cookie`, `x-api-key` and `api-key` headers, so logging a serialized
+  request/response object cannot leak secrets.
+- **`paginate()` now has safety caps**: default `countLimit: 1000` and
+  `requestLimit: 100` (was `Infinity`) stop a malicious/looping `next` link
+  from fanning out requests forever. Raise them explicitly for larger jobs.
+
 ## v1.0.0 (2026-08-15)
 
 Modern remake of the classic `request` package, published as `@zelthr/request`.

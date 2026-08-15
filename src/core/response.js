@@ -11,7 +11,7 @@ const { finalizeTimings } = require('../util').timing
 const cookies = require('../cookie')
 const { shouldRetryStatus, retryDelay } = require('../util').retry
 const { runAttempt } = require('./start')
-const { closeDisposableAgent } = require('../transport')
+const { closeDisposableAgent, makeBodyLimitError } = require('../transport')
 
 // Adapt the native response stream (http.IncomingMessage or an http2 stream)
 // into the response object, carrying status code, headers and request
@@ -197,6 +197,22 @@ function adoptReplacement (self, oldResponse, replacement) {
 function handleResponseData (self, chunk) {
   self._destdata = true
   if (self._collect) {
+    const next = (self._collectedBytes || 0) + chunk.length
+    if (self.maxBytes && next > self.maxBytes) {
+      // Abort once the response exceeds the caller's size budget so a
+      // malicious or runaway server cannot exhaust memory. The destroyed
+      // stream is given a no-op error listener so the single error we emit
+      // below is the only one consumers see.
+      const err = makeBodyLimitError(self.maxBytes)
+      const content = self.responseContent
+      if (content && typeof content.destroy === 'function') {
+        content.on('error', function () {})
+        content.destroy()
+      }
+      self.onRequestError(err)
+      return
+    }
+    self._collectedBytes = next
     self._chunks.push(chunk)
   }
   // Push into the readable side only if someone is consuming this stream,

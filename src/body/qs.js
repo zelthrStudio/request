@@ -70,6 +70,10 @@ function parse (str, options) {
     return result
   }
 
+  // Prototype-pollution guard: skip any key whose bracket path touches
+  // __proto__ / constructor / prototype, at any nesting depth.
+  const unsafeKey = /(^|\[)(__proto__|constructor|prototype)(\]|\[|$)/i
+
   const append = function (target, key, value) {
     if (key === '') {
       return
@@ -92,6 +96,9 @@ function parse (str, options) {
     const rawValue = idx === -1 ? '' : pair.slice(idx + 1)
     const key = decode(rawKey)
     const value = decode(rawValue)
+    if (unsafeKey.test(key)) {
+      continue
+    }
 
     const keys = key.split('[')
     let target = result

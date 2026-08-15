@@ -98,9 +98,9 @@ declare namespace request {
     shouldContinue?: (response: Response) => boolean
     /** Resolve the URL of the next page (default: Link rel="next", then body.next). */
     nextUrl?: (response: Response, currentUrl: string) => string | null | undefined | Promise<string | null | undefined>
-    /** Maximum number of yielded items. */
+    /** Maximum number of yielded items. @default 1000 */
     countLimit?: number
-    /** Maximum number of HTTP requests. */
+    /** Maximum number of HTTP requests. @default 100 */
     requestLimit?: number
     /** Delay between page requests in ms. */
     backoff?: number
@@ -124,6 +124,8 @@ declare namespace request {
     encoding?: string | null
     timeout?: number
     time?: boolean
+    /** Maximum collected response-body bytes; aborts with code `EBODYLIMIT` when exceeded. */
+    maxBytes?: number
     followRedirect?: boolean | ((response: Response) => boolean)
     followAllRedirects?: boolean
     followOriginalHttpMethod?: boolean

@@ -134,7 +134,11 @@ Redirect.prototype.onResponse = function (response) {
     }
   }
 
-  if (!self.removeRefererHeader) {
+  // Only forward a Referer to the same hostname: leaking the previous URL
+  // (which may carry signed tokens / query secrets) to a redirect target on a
+  // different host is a credential-disclosure risk. Set removeRefererHeader
+  // to suppress it entirely.
+  if (!self.removeRefererHeader && request.uri.hostname === uriPrev.hostname) {
     request.setHeader('referer', uriPrev.href)
   }
 

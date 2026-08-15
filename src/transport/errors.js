@@ -18,8 +18,15 @@ function makeAbortError () {
   return err
 }
 
+function makeBodyLimitError (limit) {
+  const err = new Error('Response body exceeded the maxBytes limit of ' + limit + ' bytes')
+  err.code = 'EBODYLIMIT'
+  err.maxBytes = limit
+  return err
+}
+
 function isAbortError (err) {
   return err && (err.name === 'AbortError' || err.code === 'ABORT_ERR')
 }
 
-module.exports = { makeTimeoutError, makeAbortError, isAbortError }
+module.exports = { makeTimeoutError, makeAbortError, makeBodyLimitError, isAbortError }
