@@ -176,7 +176,7 @@
   options, NO_PROXY labels, stateful mocks, MIME table, digest nc, and
   prototype-pollution guards). Full suite: 155 tests passing.
 
-## [Unreleased] — caching, DNS, brotli, progress, mocking & throughput
+## v1.1.0 (2026-08-15) — caching, DNS, brotli, progress, mocking & throughput
 
 ### Added
 
@@ -214,7 +214,7 @@
   the overhead is a single increment per chunk when no `progress` listener
   is attached.
 
-## [Unreleased] — hardening & performance
+## v1.0.1 (2026-08-15) — hardening & performance
 
 ### Fixed
 
@@ -223,17 +223,6 @@
   request host (or is a bare single-label TLD such as `Domain=com`) is
   rejected, so a malicious server can no longer poison the shared jar with
   cookies scoped to another host.
-
-### Changed
-
-- Reserved-option validation (`__proto__`/`constructor` key checks) now uses a
-  cached property-name `Set` instead of re-deriving prototype names per
-  request, removing the per-request allocation in the hot path.
-
-## [Unreleased] — security hardening
-
-### Fixed
-
 - **Security: prototype pollution in the query-string parser** (`qs.parse`).
   Keys whose bracket path touches `__proto__`, `constructor` or `prototype`
   (at any nesting depth, including percent-encoded forms) are now skipped,
@@ -254,6 +243,12 @@
 - **`paginate()` now has safety caps**: default `countLimit: 1000` and
   `requestLimit: 100` (was `Infinity`) stop a malicious/looping `next` link
   from fanning out requests forever. Raise them explicitly for larger jobs.
+
+### Changed
+
+- Reserved-option validation (`__proto__`/`constructor` key checks) now uses a
+  cached property-name `Set` instead of re-deriving prototype names per
+  request, removing the per-request allocation in the hot path.
 
 ## v1.0.0 (2026-08-15)
 
