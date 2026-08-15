@@ -1,0 +1,13 @@
+@zelthr/request
+Copyright 2026 zelthrStudio
+
+This product is a modified, modern remake of the `request` package:
+
+  request - Simplified HTTP request client
+  Copyright 2010-2012 Mikeal Rogers
+  https://github.com/request/request
+  Licensed under the Apache License, Version 2.0.
+
+The in-house replacements for form-data, mime-types, qs and tough-cookie,
+the native http/https/http2 transport, retry and pagination features are
+original work by zelthrStudio (2026).
