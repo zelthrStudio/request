@@ -1,8 +1,5 @@
 'use strict'
 
-// Modified by zelthrStudio (2026) from the original `request` package
-// (Copyright 2010-2012 Mikeal Rogers, Apache License 2.0).
-
 const qs = require('./qs')
 const querystring = require('querystring')
 

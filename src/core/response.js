@@ -1,8 +1,5 @@
 'use strict'
 
-// Modified by zelthrStudio (2026) from the original `request` package
-// (Copyright 2010-2012 Mikeal Rogers, Apache License 2.0).
-
 const zlib = require('zlib')
 const stream = require('stream')
 
@@ -16,14 +13,8 @@ const { closeDisposableAgent, makeBodyLimitError } = require('../transport')
 const guard = require('./guard')
 const { validateWithSchema } = require('../util').schema
 
-// Size cap for bodies buffered in memory (callback/promise mode) when the
-// caller did not set an explicit `maxBytes`. Streamed responses are
-// unaffected unless the caller opts into a limit.
 const DEFAULT_MAX_BYTES = 100 * 1024 * 1024
 
-// Adapt the native response stream (http.IncomingMessage or an http2 stream)
-// into the response object, carrying status code, headers and request
-// metadata.
 async function handleRequestResponse (self, response) {
   if (self._aborted) {
     response.destroy()
@@ -40,13 +31,10 @@ async function handleRequestResponse (self, response) {
   response.toJSON = responseToJSON
   self.response = response
 
-  // A response arrived for this host: the circuit breaker (if any) can
-  // start counting failures from a clean slate.
   if (self._circuitBreaker) {
     guard.cbRecordSuccess(self)
   }
 
-  // Accumulate decoded bytes for the RFC 7234 cache (only for fresh GETs).
   if (self._cache && self.method === 'GET' && !self._cacheHit) {
     self._cacheChunks = []
   }
@@ -60,7 +48,6 @@ async function handleRequestResponse (self, response) {
 
   self.originalHost = self.uri.host
 
-  // Save set-cookie headers into the cookie jar.
   const targetCookieJar = (self._jar && self._jar.setCookie) ? self._jar : cookies.globalJar
   const addCookie = function (cookie) {
     try {
@@ -70,9 +57,6 @@ async function handleRequestResponse (self, response) {
     }
   }
 
-  // Collect the raw Set-Cookie headers. http/1.x responses carry them in
-  // rawHeaders (one entry per header line); http/2 and undici join multiple
-  // Set-Cookie lines into one string, which must be split back apart.
   const setCookieName = Object.keys(response.headers).find(function (name) {
     return name.toLowerCase() === 'set-cookie'
   })
@@ -93,16 +77,13 @@ async function handleRequestResponse (self, response) {
           return out
         }
       }
-      // Fallback: split on ', ' only when the fragment starts with a cookie
-      // name followed by '='. A naive split(', ') would tear the "Wdy, DD
-      // Mon YYYY" date inside an Expires attribute into a bogus cookie.
       return String(value).split(/,\s*(?=[A-Za-z0-9!#$%&'*+\-.^_`|~]+\s*=)/).filter(Boolean)
     }
     splitSetCookies(response.headers[setCookieName]).forEach(addCookie)
   }
 
   if (self._redirect.onResponse(response)) {
-    return // Ignore the rest of the response.
+    return
   }
 
   if (shouldRetryStatus(self, response.statusCode)) {
@@ -116,8 +97,6 @@ async function handleRequestResponse (self, response) {
     }, delay)
   }
 
-  // A 304 Not Modified revalidates the stored entry: refresh it and serve
-  // the cached body in place of the empty 304.
   if (self._cache && self.method === 'GET' && response.statusCode === 304) {
     const entry = self._cache.refresh(self, response)
     if (entry) {
@@ -126,8 +105,6 @@ async function handleRequestResponse (self, response) {
       response = self._cache.serve(self, entry)
       response.revalidated = true
       self.response = response
-      // The served body must not be re-stored as a fresh entry (it would
-      // duplicate the refreshed variant on every revalidation).
       self._cacheChunks = null
       if (self._progress && self._progress.total === null) {
         const len = response.headers['content-length']
@@ -138,8 +115,6 @@ async function handleRequestResponse (self, response) {
     }
   }
 
-  // afterResponse hooks may inspect (or replace) the response. Redirects
-  // never reach this point, matching Got semantics.
   const hooks = self._hooks && self._hooks.afterResponse
   if (hooks && hooks.length) {
     try {
@@ -163,11 +138,8 @@ async function handleRequestResponse (self, response) {
   const noBody = function (code) {
     return (
       self.method === 'HEAD' ||
-      // Informational
       (code >= 100 && code < 200) ||
-      // No Content
       code === 204 ||
-      // Not Modified
       code === 304
     )
   }
@@ -176,9 +148,6 @@ async function handleRequestResponse (self, response) {
   if (self.gzip && !noBody(response.statusCode)) {
     const contentEncoding = (response.headers['content-encoding'] || 'identity').trim().toLowerCase()
 
-    // Be more lenient with decoding compressed responses, since (very rarely)
-    // servers send slightly invalid gzip responses that are still accepted
-    // by common browsers. Always using Z_SYNC_FLUSH is what cURL does.
     const zlibOptions = {
       flush: zlib.Z_SYNC_FLUSH,
       finishFlush: zlib.Z_SYNC_FLUSH
@@ -194,8 +163,6 @@ async function handleRequestResponse (self, response) {
       responseContent = zlib.createBrotliDecompress(zlibOptions)
       response.pipe(responseContent)
     } else {
-      // Since previous versions didn't check for Content-Encoding header,
-      // ignore any invalid values to preserve backwards-compatibility.
       if (contentEncoding !== 'identity') {
         self.debug('ignoring unrecognized Content-Encoding ' + contentEncoding)
       }
@@ -234,7 +201,6 @@ async function handleRequestResponse (self, response) {
   })
 }
 
-// A hook returned a replacement response: adopt its statusCode/headers/body.
 function adoptReplacement (self, oldResponse, replacement) {
   let body = replacement.body
   if (body === undefined) {
@@ -271,18 +237,22 @@ function handleResponseData (self, chunk) {
     }
   }
   if (self._cacheChunks) {
-    self._cacheChunks.push(chunk)
+    const cacheBudget = (self._cache && typeof self._cache.maxBytes === 'number')
+      ? self._cache.maxBytes
+      : 64 * 1024 * 1024
+    const cached = (self._cacheBytes || 0) + chunk.length
+    if (cached <= cacheBudget) {
+      self._cacheBytes = cached
+      self._cacheChunks.push(chunk)
+    } else {
+      self._cacheChunks = null
+      self._cacheBytes = 0
+    }
   }
   if (self._collect) {
     const next = (self._collectedBytes || 0) + chunk.length
-    // Every body that is buffered in memory (callback/promise mode) gets a
-    // size budget: an explicit `maxBytes` option, or a generous default, so
-    // a malicious or runaway server cannot exhaust memory.
     const limit = self.maxBytes !== undefined ? self.maxBytes : DEFAULT_MAX_BYTES
     if (next > limit) {
-      // Abort once the response exceeds the caller's size budget. The
-      // destroyed stream is given a no-op error listener so the single
-      // error we emit below is the only one consumers see.
       const err = makeBodyLimitError(limit)
       const content = self.responseContent
       if (content && typeof content.destroy === 'function') {
@@ -295,9 +265,6 @@ function handleResponseData (self, chunk) {
     self._collectedBytes = next
     self._chunks.push(chunk)
   }
-  // Push into the readable side only if someone is consuming this stream,
-  // otherwise the data would be buffered forever. The Readable machinery
-  // emits the 'data' events itself for flowing consumers.
   if (self._readableState.flowing || self._readableState.pipes) {
     const ok = self.push(chunk)
     if (!ok && self.responseContent && self.responseContent.isPaused()) {
@@ -331,10 +298,6 @@ function handleResponseEnd (self) {
     if (self._chunks.length) {
       const buf = Buffer.concat(self._chunks)
       body = self.encoding === null ? buf : buf.toString(self.encoding || 'utf8')
-      // The UTF8 BOM [0xEF,0xBB,0xBF] is converted to [0xFE,0xFF] in the JS
-      // UTC16/UCS2 representation. Strip this value out when the encoding is
-      // set to a UTF-8 alias ('utf8' or 'utf-8'), as upstream consumers
-      // won't expect it and it breaks JSON.parse().
       const isUtf8 = self.encoding === 'utf8' || self.encoding === 'utf-8'
       if (isUtf8 && typeof body === 'string' && body.charCodeAt(0) === 0xFEFF) {
         body = body.slice(1)
@@ -342,9 +305,6 @@ function handleResponseEnd (self) {
     }
 
     if (self._json) {
-      // `json: true` promises a parsed object; a non-JSON payload must not
-      // silently degrade into a raw string that callers will misread as a
-      // successful parse.
       if (typeof body === 'string' && body !== '') {
         try {
           body = JSON.parse(body)
@@ -358,8 +318,6 @@ function handleResponseEnd (self) {
       }
     }
 
-    // Schema validation: zod throws, joi/valibot-style validators fail
-    // with a result object; a plain function may throw or transform.
     if (self._schema && typeof body !== 'undefined' && body !== '') {
       try {
         body = validateWithSchema(self._schema, body)

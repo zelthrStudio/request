@@ -1,22 +1,23 @@
 'use strict'
 
-// Modified by zelthrStudio (2026) from the original `request` package
-// (Copyright 2010-2012 Mikeal Rogers, Apache License 2.0).
-
 const crypto = require('crypto')
 const stream = require('stream')
 const helpers = require('../util').helpers
 
 const isstream = helpers.isstream
 
-// Strip header-injection characters from multipart preamble headers: a
-// part's option keys/values are user-controlled and must not smuggle
-// CR/LF-separated fake headers (or stray quotes) into the request body.
 function sanitizeHeaderValue (value) {
-  return String(value).replace(/[\r\n"]/g, '')
+  let out = String(value).replace(/[\r\n]/g, '')
+  for (let i = 0; i < out.length; i++) {
+    const code = out.charCodeAt(i)
+    if (code < 0x20 || code === 0x7f) {
+      out = out.slice(0, i) + out.slice(i + 1)
+      i--
+    }
+  }
+  return out
 }
 
-// Combine an array of strings, buffers and streams into a single stream.
 function combinedStream (parts) {
   const out = new stream.PassThrough()
   let i = 0
@@ -131,9 +132,6 @@ Multipart.prototype.build = function (parts, chunked) {
     }
     preamble += '\r\n'
     add(preamble)
-    // Wrap string bodies in Buffers so the combined array is all-Buffer:
-    // the content-length computation then sums real UTF-8 byte counts
-    // instead of UTF-16 code units (which truncates non-ASCII bodies).
     body.push(typeof part.body === 'string' || typeof part.body === 'number'
       ? Buffer.from(String(part.body))
       : part.body)
@@ -157,11 +155,6 @@ Multipart.prototype.onRequest = function (options) {
   self.setHeaders(chunked)
   self.chunked = chunked
   self.body = self.build(parts, chunked)
-
-  // NOTE: never end() the combined stream here. It terminates on its own
-  // once every part has been consumed; ending it eagerly while a stream
-  // part is still pending would emit 'write after end' and abort the
-  // request mid-body.
 }
 
 exports.Multipart = Multipart

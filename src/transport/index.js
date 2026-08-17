@@ -1,10 +1,5 @@
 'use strict'
 
-// Copyright 2026 zelthrStudio. Licensed under the Apache License, Version 2.0.
-
-// Wire-level transport: HTTP/1.1 (with CONNECT tunneling through proxies),
-// HTTP/2, connection pooling, TLS options and shared body/error helpers.
-
 const http1 = require('./http1')
 const http2 = require('./http2')
 const { getAgent, closeDisposableAgent, closePool } = require('./pool')

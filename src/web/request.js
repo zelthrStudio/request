@@ -1,14 +1,5 @@
 'use strict'
 
-// Copyright 2026 zelthrStudio. Licensed under the Apache License, Version 2.0.
-
-// Web & Edge runtime client: a fetch-based implementation of the
-// @zelthr/request API for environments without Node's http stack (Next.js
-// middleware & Edge runtime, Vercel Edge Functions, Cloudflare Workers,
-// Deno, browsers). The circuit breaker, per-host rate limiter and schema
-// validator are shared with the main package; everything else is built on
-// fetch and web streams, so there are no Node built-in imports.
-
 const { validateWithSchema } = require('../util/schema')
 const {
   normalizeCircuitBreaker,
@@ -23,10 +14,6 @@ const DEFAULT_MAX_REDIRECTS = 10
 const DEFAULT_MAX_BYTES = 100 * 1024 * 1024
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
 
-// Options the main Node entry supports but this fetch-based build cannot
-// honor (no Node http stack, no cookie jar, no proxy/tunnel, no agent
-// pool, ...). Silently ignoring them would give callers different behavior
-// than they asked for; fail loudly instead.
 const UNSUPPORTED_OPTIONS = [
   'retry',
   'jar',
@@ -57,24 +44,14 @@ const UNSUPPORTED_OPTIONS = [
   'secureProtocol',
   'secureOptions',
   'checkServerIdentity',
-  // Compression control beyond fetch's transparent handling: fetch always
-  // advertises and decompresses br, so `brotli: false` cannot be honored.
   'brotli',
-  // Redirect referer control and JSON/query serialization knobs the
-  // fetch-based build has no hook into.
   'removeRefererHeader',
   'jsonReplacer',
   'useQuerystring',
   'qsParseOptions'
 ]
 
-// In-flight request coalescing (`dedupe: true`). Web responses are
-// buffered plain objects, so waiters are simply handed copies of the
-// settled result - no stream tee-ing involved. Keyed like the main
-// package: method + ' ' + href.
 const inFlight = new Map()
-
-// --- Tiny event emitter ----------------------------------------------------
 
 function makeEmitter (target) {
   const listeners = {}
@@ -110,8 +87,6 @@ function makeEmitter (target) {
   return target
 }
 
-// --- Helpers ---------------------------------------------------------------
-
 function stripUserInfo (href) {
   try {
     const url = new URL(href)
@@ -123,8 +98,6 @@ function stripUserInfo (href) {
   }
 }
 
-// Build the response object from a fetch Response, or replay it from a
-// previously built response (dedupe waiters).
 function makeResponse (self, fetchResponse, body) {
   const headers = {}
   const source = fetchResponse.headers
@@ -145,12 +118,23 @@ function makeResponse (self, fetchResponse, body) {
     body,
     request: self,
     toJSON: function () {
-      const out = { statusCode: this.statusCode, headers: this.headers, body: this.body }
+      const out = { statusCode: this.statusCode, headers: {}, body: this.body }
+      const sensitive = /authorization|proxy-authorization|cookie|set-cookie|x-api-key|api-key|apikey/i
+      for (const name of Object.keys(this.headers)) {
+        if (!sensitive.test(name)) {
+          out.headers[name] = this.headers[name]
+        }
+      }
       if (this.request) {
         out.request = {
           method: this.request.method,
           uri: stripUserInfo(this.request.uri.href),
-          headers: this.request.headers
+          headers: {}
+        }
+        for (const name of Object.keys(this.request.headers)) {
+          if (!sensitive.test(name)) {
+            out.request.headers[name] = this.request.headers[name]
+          }
         }
       }
       return out
@@ -159,7 +143,6 @@ function makeResponse (self, fetchResponse, body) {
   return response
 }
 
-// Base64 without Buffer, in case of non-ASCII credentials.
 function base64Encode (str) {
   const bytes = new TextEncoder().encode(str)
   let binary = ''
@@ -171,6 +154,18 @@ function base64Encode (str) {
 
 function isRedirectStatus (status) {
   return REDIRECT_STATUSES.has(status)
+}
+
+const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
+function safeCopy (target, source) {
+  for (const key of Object.keys(source)) {
+    if (UNSAFE_KEYS.has(key)) {
+      continue
+    }
+    target[key] = source[key]
+  }
+  return target
 }
 
 function isBodyTypeSupported (value) {
@@ -185,15 +180,10 @@ function isBodyTypeSupported (value) {
   )
 }
 
-// --- Request ---------------------------------------------------------------
-
 class WebRequest {
   constructor (options) {
     makeEmitter(this)
 
-    // Options this entry cannot honor are rejected up front rather than
-    // silently ignored: a caller migrating from the Node client must not
-    // get different behavior without noticing.
     for (const name of UNSUPPORTED_OPTIONS) {
       if (options[name] !== undefined) {
         const err = new Error('The web/edge entry does not support options.' + name + '; use the Node entry ("@zelthr/request") instead')
@@ -228,6 +218,9 @@ class WebRequest {
       return
     }
     if (options.baseUrl) {
+      if (options.baseUrl instanceof URL) {
+        options.baseUrl = options.baseUrl.href
+      }
       if (typeof uri !== 'string') {
         this._initError = new Error('options.uri must be a string when using options.baseUrl')
         return
@@ -256,20 +249,37 @@ class WebRequest {
 
     if (options.qs) {
       const params = new URLSearchParams(this.uri.search)
-      for (const key of Object.keys(options.qs)) {
-        const value = options.qs[key]
-        if (Array.isArray(value)) {
-          for (const v of value) {
-            params.append(key, String(v))
+      if (typeof URLSearchParams !== 'undefined' && options.qs instanceof URLSearchParams) {
+        for (const [key, value] of options.qs.entries()) {
+          params.append(key, value)
+        }
+      } else if (typeof options.qs === 'object') {
+        for (const key of Object.keys(options.qs)) {
+          const value = options.qs[key]
+          if (Array.isArray(value)) {
+            for (const v of value) {
+              params.append(key, String(v))
+            }
+          } else if (value !== undefined && value !== null) {
+            params.append(key, String(value))
           }
-        } else {
-          params.append(key, String(value))
         }
       }
       this.uri.search = params.toString()
     }
 
     this.path = this.uri.pathname + (this.uri.search || '')
+
+    if (this.uri.username || this.uri.password) {
+      if (!this.hasHeader('authorization')) {
+        const user = decodeURIComponent(this.uri.username || '')
+        const pass = decodeURIComponent(this.uri.password || '')
+        this.setHeader('authorization', 'Basic ' + base64Encode(user + ':' + pass))
+      }
+      this.uri.username = ''
+      this.uri.password = ''
+      this.path = this.uri.pathname + (this.uri.search || '')
+    }
 
     this._json = !!options.json
     this._dedupe = !!options.dedupe
@@ -292,8 +302,6 @@ class WebRequest {
 
   _buildBody (options) {
     if (options.formData !== undefined && !(options.formData instanceof FormData)) {
-      // The Node entry accepts a plain object and encodes it as
-      // multipart/form-data; the fetch-based entry cannot.
       const err = new Error('The web/edge entry only supports options.formData as a FormData instance; pass a FormData object or use the Node entry ("@zelthr/request")')
       err.code = 'EUNSUPPORTED'
       throw err
@@ -304,6 +312,9 @@ class WebRequest {
     if (options.form) {
       if (typeof options.form === 'string') {
         return { body: options.form, contentType: 'application/x-www-form-urlencoded', replayable: true }
+      }
+      if (typeof URLSearchParams !== 'undefined' && options.form instanceof URLSearchParams) {
+        return { body: options.form.toString(), contentType: 'application/x-www-form-urlencoded', replayable: true }
       }
       const params = new URLSearchParams()
       for (const key of Object.keys(options.form)) {
@@ -316,11 +327,9 @@ class WebRequest {
           params.append(key, String(value))
         }
       }
-      return { body: params, contentType: 'application/x-www-form-urlencoded', replayable: true }
+      return { body: params.toString(), contentType: 'application/x-www-form-urlencoded', replayable: true }
     }
     if (options.json && options.json !== true) {
-      // `json: true` only means "parse the response"; an object/string
-      // additionally serializes the request body (like the main package).
       let value = options.json
       if (typeof value !== 'string') {
         value = JSON.stringify(value)
@@ -384,6 +393,83 @@ class WebRequest {
 
   removeHeader (name) {
     delete this.headers[name.toLowerCase()]
+    return this
+  }
+
+  qs (q, clobber) {
+    if (!this.uri) {
+      return this
+    }
+    const params = clobber ? new URLSearchParams() : new URLSearchParams(this.uri.search)
+    if (typeof URLSearchParams !== 'undefined' && q instanceof URLSearchParams) {
+      for (const [key, value] of q.entries()) {
+        params.append(key, value)
+      }
+    } else if (q && typeof q === 'object') {
+      for (const key of Object.keys(q)) {
+        const value = q[key]
+        if (Array.isArray(value)) {
+          for (const v of value) {
+            params.append(key, String(v))
+          }
+        } else if (value !== undefined && value !== null) {
+          params.append(key, String(value))
+        }
+      }
+    }
+    this.uri.search = params.toString()
+    this.path = this.uri.pathname + (this.uri.search || '')
+    return this
+  }
+
+  form (form) {
+    if (form) {
+      if (!this.hasHeader('content-type')) {
+        this.setHeader('content-type', 'application/x-www-form-urlencoded')
+      }
+      if (typeof form === 'string') {
+        this._body = { body: form, contentType: 'application/x-www-form-urlencoded', replayable: true }
+      } else if (typeof URLSearchParams !== 'undefined' && form instanceof URLSearchParams) {
+        this._body = { body: form, contentType: 'application/x-www-form-urlencoded', replayable: true }
+      } else if (form && typeof form === 'object') {
+        const params = new URLSearchParams()
+        for (const key of Object.keys(form)) {
+          const value = form[key]
+          if (Array.isArray(value)) {
+            for (const v of value) {
+              params.append(key, String(v))
+            }
+          } else {
+            params.append(key, String(value))
+          }
+        }
+        this._body = { body: params.toString(), contentType: 'application/x-www-form-urlencoded', replayable: true }
+      }
+    }
+    return this
+  }
+
+  json (val) {
+    if (!this.hasHeader('accept')) {
+      this.setHeader('accept', 'application/json')
+    }
+    this._json = true
+    if (val !== undefined && val !== true && typeof val !== 'boolean') {
+      this._body = { body: typeof val === 'string' ? val : JSON.stringify(val), contentType: 'application/json', replayable: true }
+      if (!this.hasHeader('content-type')) {
+        this.setHeader('content-type', 'application/json')
+      }
+    }
+    return this
+  }
+
+  auth (user, pass, sendImmediately, bearer) {
+    if (bearer) {
+      this.setHeader('authorization', 'Bearer ' + bearer)
+    } else if (user !== undefined && user !== null) {
+      this.setHeader('authorization', 'Basic ' + base64Encode(user + ':' + (pass || '')))
+    }
+    return this
   }
 
   abort () {
@@ -408,30 +494,30 @@ class WebRequest {
     if (self._initError) {
       return self._fail(self._initError)
     }
-    self._attempt(0)
+    queueMicrotask(function () {
+      if (!self._aborted) {
+        self._attempt(0)
+      }
+    })
   }
 
-  // One dispatch attempt; redirects loop back through _attempt().
   async _attempt (redirectCount) {
     const self = this
     try {
       self._timedOut = false
 
-      // Deduplication: coalesce onto an existing in-flight request.
       if (self._dedupe && (self.method === 'GET' || self.method === 'HEAD')) {
         if (dedupeAcquire(self)) {
           return
         }
       }
 
-      // Circuit breaker: fail fast while the host's circuit is open.
       if (self._circuitBreaker && cbOpen(self)) {
         const err = new Error('Circuit breaker open for ' + self.uri.host)
         err.code = 'CB_OPEN'
         throw err
       }
 
-      // Rate limiting: wait for the per-host token before dispatching.
       if (self._rateLimit) {
         await rateAcquire(self)
       }
@@ -497,15 +583,27 @@ class WebRequest {
         }
         throw mapFetchError(err)
       }
+      let body
+      try {
+        body = await readBody(self, fetchResponse)
+      } catch (err) {
+        if (timeoutTimer) {
+          clearTimeout(timeoutTimer)
+        }
+        self._controller.signal.removeEventListener('abort', onAbort)
+        if (self._timedOut) {
+          const timeoutError = new Error('ESOCKETTIMEDOUT')
+          timeoutError.code = 'ETIMEDOUT'
+          timeoutError.connect = false
+          throw timeoutError
+        }
+        throw err
+      }
       if (timeoutTimer) {
         clearTimeout(timeoutTimer)
       }
       self._controller.signal.removeEventListener('abort', onAbort)
-
-      const body = await readBody(self, fetchResponse)
       let parsedBody = body
-      // Schema validation: zod throws, joi/valibot-style validators fail
-      // with a result object; a plain function may throw or transform.
       if (self._schema && typeof parsedBody !== 'undefined' && parsedBody !== '') {
         parsedBody = validateWithSchema(self._schema, parsedBody)
       }
@@ -518,7 +616,6 @@ class WebRequest {
       }
       self.emit('response', response)
 
-      // A response arrived: the circuit breaker counts from a clean slate.
       if (self._circuitBreaker) {
         cbRecordSuccess(self)
       }
@@ -563,9 +660,6 @@ class WebRequest {
     }
   }
 
-  // Decide whether (and where) a 3xx response redirects. Returns the
-  // absolute target URL, or null when the response should be delivered
-  // as-is.
   _redirectTarget (response) {
     const self = this
     const status = response.statusCode
@@ -679,12 +773,6 @@ function mapFetchError (err) {
   return mapped
 }
 
-// Buffer a response body with a size budget, honoring the caller's
-// encoding. Returns a string (decoded) or a Uint8Array when
-// encoding === null.
-// Decode a buffered body honoring the caller's encoding. TextDecoder only
-// knows the WHATWG labels; map the common legacy aliases onto them so
-// `encoding: 'latin1'` does not throw a RangeError.
 const ENCODING_ALIASES = {
   latin1: 'windows-1252',
   'iso-8859-1': 'windows-1252',
@@ -731,8 +819,6 @@ async function readBody (self, fetchResponse) {
   const isUtf8 = self.encoding === 'utf8' || self.encoding === 'utf-8'
   const label = isUtf8 ? 'utf-8' : (ENCODING_ALIASES[self.encoding] || self.encoding)
   let text = new TextDecoder(label).decode(bytes)
-  // Strip the UTF-8 BOM (0xFEFF in the decoded string): upstream consumers
-  // don't expect it and it breaks JSON.parse().
   if (isUtf8 && text.charCodeAt(0) === 0xFEFF) {
     text = text.slice(1)
   }
@@ -760,12 +846,6 @@ function concatBytes (chunks, total) {
   return out
 }
 
-// --- Deduplication ---------------------------------------------------------
-
-// Credential headers that must split the coalescing key: two concurrent
-// requests to the same URL with different auth/cookies must not share one
-// network request. Values are embedded verbatim (no crypto available in
-// edge runtimes; the key only lives in an in-memory Map).
 const DEDUPE_CREDENTIAL_HEADERS = ['authorization', 'cookie']
 
 function dedupeKey (self) {
@@ -804,9 +884,6 @@ function dedupeAcquire (self) {
   return false
 }
 
-// Replay the primary's settled response to every waiter. A failure to
-// replay one waiter (e.g. a consumer with a corrupted request object)
-// fails that waiter alone; the primary's own settlement is unaffected.
 function deliverDedupe (primary, body) {
   const entry = primary._dedupeEntry
   if (!entry) {
@@ -843,26 +920,20 @@ function failDedupe (primary, err) {
   }
 }
 
-// --- Public API ------------------------------------------------------------
-
 function initParams (uri, options, callback) {
   if (typeof options === 'function') {
     callback = options
   }
   const params = {}
   if (options !== null && typeof options === 'object') {
-    for (const key of Object.keys(options)) {
-      params[key] = options[key]
-    }
+    safeCopy(params, options)
     if (uri !== undefined) {
       params.uri = uri
     }
   } else if (typeof uri === 'string' || uri instanceof URL) {
     params.uri = uri
   } else if (uri && typeof uri === 'object') {
-    for (const key of Object.keys(uri)) {
-      params[key] = uri[key]
-    }
+    safeCopy(params, uri)
   }
   params.callback = callback || params.callback
   return params
@@ -917,15 +988,37 @@ request.promise = function (uri, options) {
   }
 }
 
+function promiseVerbFunc (verb) {
+  const method = verb.toUpperCase()
+  return function (uri, options) {
+    const params = initParams(uri, options)
+    params.method = method
+    delete params.callback
+    return request.promise(params)
+  }
+}
+
+request.promise.get = promiseVerbFunc('get')
+request.promise.head = promiseVerbFunc('head')
+request.promise.options = promiseVerbFunc('options')
+request.promise.post = promiseVerbFunc('post')
+request.promise.put = promiseVerbFunc('put')
+request.promise.patch = promiseVerbFunc('patch')
+request.promise.del = promiseVerbFunc('delete')
+request.promise.delete = promiseVerbFunc('delete')
+
 request.defaults = function (defaultOptions) {
   defaultOptions = defaultOptions || {}
   const merge = function (params) {
     const merged = {}
-    for (const key of Object.keys(defaultOptions)) {
-      merged[key] = defaultOptions[key]
-    }
-    for (const key of Object.keys(params)) {
-      merged[key] = params[key]
+    safeCopy(merged, defaultOptions)
+    safeCopy(merged, params)
+    if (defaultOptions.headers && params && params.headers) {
+      merged.headers = Object.assign({}, defaultOptions.headers, params.headers)
+    } else if (defaultOptions.headers) {
+      merged.headers = Object.assign({}, defaultOptions.headers)
+    } else if (params && params.headers) {
+      merged.headers = Object.assign({}, params.headers)
     }
     return merged
   }
@@ -933,7 +1026,8 @@ request.defaults = function (defaultOptions) {
     const params = initParams(uri, options, callback)
     return request(merge(params), params.callback)
   }
-  for (const verb of ['get', 'head', 'post', 'put', 'patch', 'del', 'delete']) {
+  const verbs = ['get', 'head', 'options', 'post', 'put', 'patch', 'del', 'delete']
+  for (const verb of verbs) {
     apply[verb] = function (uri, options, callback) {
       const params = initParams(uri, options, callback)
       params.method = verb === 'del' ? 'DELETE' : verb.toUpperCase()
@@ -945,7 +1039,21 @@ request.defaults = function (defaultOptions) {
     delete params.callback
     return request.promise(merge(params))
   }
+  for (const verb of verbs) {
+    apply.promise[verb] = function (uri, options) {
+      const params = initParams(uri, options)
+      params.method = verb === 'del' ? 'DELETE' : verb.toUpperCase()
+      delete params.callback
+      return request.promise(merge(params))
+    }
+  }
+  apply.defaults = function (opts) {
+    return request.defaults(merge(opts || {}))
+  }
   return apply
 }
+
+request.initParams = initParams
+request.Request = WebRequest
 
 module.exports = request

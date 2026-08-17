@@ -1,26 +1,13 @@
 'use strict'
 
-// Copyright 2026 zelthrStudio. Licensed under the Apache License, Version 2.0.
-
 const http2 = require('http2')
 const { connectOptions, connectSignature } = require('./tls')
 const { makeTimeoutError } = require('./errors')
 const { writeBody } = require('./body')
 
-// HTTP/2 support using Node's built-in http2 module. Sessions are pooled
-// per origin + TLS settings and multiplexed across requests. For https:,
-// ALPN negotiates h2 (falling back to HTTP/1.1 when the server only speaks
-// http/1.1); for http:, cleartext h2c (prior knowledge) is used.
-
 const sessions = new Map()
-// Sessions still mid-connection (TLS/ALPN): tracked separately so
-// closeSessions() can destroy them at shutdown.
 const pendingSessions = new Set()
 
-// Wall-clock budget for the whole connection phase (TCP + TLS + ALPN). The
-// socket-level connectTimeout only covers TCP; a server that accepts TCP
-// but never completes the handshake must not leave the connecting promise
-// (and every request queued behind it) pending forever.
 const CONNECT_WALL_CLOCK_TIMEOUT = 30000
 
 const forbiddenHeaders = ['connection', 'keep-alive', 'proxy-connection', 'transfer-encoding', 'upgrade', 'host', 'hostname']
@@ -34,9 +21,6 @@ function getSession (self) {
     const key = sessionKey(self)
     const existing = sessions.get(key)
     if (existing) {
-      // A concurrent request may already be connecting: the map holds a
-      // promise until the session is established, so concurrent requests
-      // share one connection instead of opening one each.
       if (typeof existing.then === 'function') {
         existing.then(resolve, reject)
         return
@@ -48,10 +32,6 @@ function getSession (self) {
     }
 
     const connecting = new Promise(function (resolve, reject) {
-      // The socket-level connectTimeout covers the TCP phase. The default
-      // 10s must not outlive the caller's own budgets: a tight `timeout` or
-      // `http2ConnectTimeout` wins, so a request that would time out anyway
-      // fails with a connect-specific error instead of a generic one.
       let connectTimeout = 10000
       if (self.http2ConnectTimeout !== undefined) {
         connectTimeout = Math.min(connectTimeout, self.http2ConnectTimeout)
@@ -73,9 +53,6 @@ function getSession (self) {
 
       let session = null
       let settled = false
-      // An explicit request timeout also bounds the connection phase; a
-      // dedicated `http2ConnectTimeout` overrides the 30s wall-clock budget
-      // for slow handshakes without timing out the whole request.
       const connectBudget = self.http2ConnectTimeout !== undefined
         ? self.http2ConnectTimeout
         : (self.timeout || CONNECT_WALL_CLOCK_TIMEOUT)
@@ -122,8 +99,6 @@ function getSession (self) {
         if (sessions.get(key) === session) {
           sessions.delete(key)
         }
-        // A close with no preceding error (e.g. destroy before connect):
-        // settle the promise so waiters do not hang.
         if (!settled) {
           finish(new Error('HTTP/2 connection closed before it was established'))
         }
@@ -131,7 +106,6 @@ function getSession (self) {
 
       session.once('connect', function () {
         if (self.uri.protocol === 'https:' && session.alpnProtocol === 'http/1.1') {
-          // The server only speaks HTTP/1.1; close this session and fall back.
           session.close()
           sessions.delete(key)
           finish(null, { session: null, key, fallback: true })
@@ -142,8 +116,6 @@ function getSession (self) {
       })
     })
 
-    // Publish the in-flight promise immediately; replace it with the real
-    // session (or drop it) when the connection settles.
     sessions.set(key, connecting)
     connecting.then(function (result) {
       if (result.session) {
@@ -244,8 +216,6 @@ function dispatchStream (self, session) {
 }
 
 function closeSessions () {
-  // Destroy sessions still mid-connection: they have no `.close` to await,
-  // and without a destroy the socket would leak at shutdown.
   for (const session of pendingSessions) {
     try {
       session.destroy()
@@ -253,7 +223,6 @@ function closeSessions () {
   }
   pendingSessions.clear()
   for (const value of sessions.values()) {
-    // The map may hold in-flight connect promises (no .close method).
     if (typeof value.close === 'function' && !value.closed && !value.destroyed) {
       value.close()
     }

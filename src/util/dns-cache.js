@@ -1,15 +1,10 @@
 'use strict'
 
-// Copyright 2026 zelthrStudio. Licensed under the Apache License, Version 2.0.
-
 const dns = require('dns')
 
-// A `lookup` function (compatible with net.connect / http.request) that
-// caches dns.lookup results for `ttl` milliseconds. The cache is keyed by
-// hostname + address family so IPv4/IPv6 lookups do not poison each other.
 function createDnsCache (options) {
   options = options || {}
-  const ttl = options.ttl || 30000
+  const ttl = options.ttl === 0 ? 0 : (options.ttl || 30000)
   const max = options.max || 1000
   const entries = new Map()
 
@@ -23,7 +18,7 @@ function createDnsCache (options) {
     const key = hostname + '|' + family + '|' + (all ? 'a' : 'f')
     const hit = entries.get(key)
     if (hit) {
-      if ((Date.now() - hit.at) < ttl) {
+      if ((Date.now() - hit.at) < ttl && hit.addresses.length > 0) {
         process.nextTick(function () {
           if (all) {
             cb(null, hit.addresses)
@@ -33,14 +28,18 @@ function createDnsCache (options) {
         })
         return
       }
-      // TTL expired: drop the stale entry now (a DNS failover must not
-      // keep serving a stale IP) instead of only replacing it lazily.
       entries.delete(key)
     }
 
     dns.lookup(hostname, { family, all: true }, function (err, addresses) {
       if (err) {
         cb(err)
+        return
+      }
+      if (!addresses || addresses.length === 0) {
+        const notFoundErr = new Error('getaddrinfo ENOTFOUND ' + hostname)
+        notFoundErr.code = 'ENOTFOUND'
+        cb(notFoundErr)
         return
       }
       entries.set(key, { at: Date.now(), addresses })
@@ -64,8 +63,6 @@ function createDnsCache (options) {
   return lookup
 }
 
-// Shared instance used by `dnsCache: true`. Exposed as request.cache of the
-// DNS layer so tests and apps can clear it.
 const defaultDnsCache = createDnsCache()
 
 module.exports = { createDnsCache, defaultDnsCache }

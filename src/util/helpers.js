@@ -1,8 +1,5 @@
 'use strict'
 
-// Modified by zelthrStudio (2026) from the original `request` package
-// (Copyright 2010-2012 Mikeal Rogers, Apache License 2.0).
-
 const crypto = require('crypto')
 
 function defer (fn) {
@@ -13,10 +10,6 @@ function isPlainObject (obj) {
   return obj !== null && typeof obj === 'object' && obj.constructor === Object
 }
 
-// Keys that must never be copied with a plain assignment: on a JSON-parsed
-// object, `__proto__` is an own data property, and `target['__proto__'] =
-// value` would silently mutate the target's prototype instead of creating a
-// property (prototype pollution).
 const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
 
 function copyKey (target, key, value) {
@@ -25,14 +18,13 @@ function copyKey (target, key, value) {
   }
 }
 
-// Shallow or deep extend. Pass `true` as the first argument for a deep merge.
 function extend (obj, ...rest) {
   let deep = false
   if (typeof obj === 'boolean') {
     deep = obj
     obj = rest.shift()
   }
-  const target = obj
+  const target = (obj && typeof obj === 'object') ? obj : {}
   for (const source of rest) {
     if (!source || typeof source !== 'object') {
       continue
@@ -72,7 +64,6 @@ function paramsHaveRequestBody (params) {
   )
 }
 
-// JSON.stringify that does not blow up on circular references.
 function safeStringify (obj, replacer) {
   const seen = new WeakSet()
   return JSON.stringify(obj, function (key, value) {
@@ -105,7 +96,6 @@ function toBase64 (str) {
   return Buffer.from(str || '', 'utf8').toString('base64')
 }
 
-// Case-insensitive header helpers over a plain headers object.
 function caseless (dict) {
   const lower = {}
   for (const key of Object.keys(dict)) {

@@ -1,8 +1,5 @@
 'use strict'
 
-// Modified by zelthrStudio (2026) from the original `request` package
-// (Copyright 2010-2012 Mikeal Rogers, Apache License 2.0).
-
 const stream = require('stream')
 
 const FormData = require('../body').FormData
@@ -22,8 +19,6 @@ const { handleRequestResponse, handleResponseData, handleResponseEnd } = require
 const extend = helpers.extend
 const safeStringify = helpers.safeStringify
 
-// Prototype property names are computed once per process (not per request)
-// so the constructor's option-vs-prototype split is an O(1) Set lookup.
 let reservedNamesCache = null
 function getReservedNames () {
   if (!reservedNamesCache) {
@@ -47,12 +42,10 @@ class Request extends stream.Duplex {
     self._multipart = new Multipart(self)
     self._redirect = new Redirect(self)
 
-    // AbortController backing abort() and the dispatcher's signal.
     self._controller = new AbortController()
     self._hasWrites = false
     self._retryAttempts = 0
 
-    // Extend the request instance with any non-reserved properties.
     const reserved = getReservedNames()
     const nonReserved = {}
     for (const key of Object.keys(options)) {
@@ -71,7 +64,6 @@ class Request extends stream.Duplex {
     self.init(options)
   }
 
-  // Debugging
   static get debug () {
     return (process.env.NODE_DEBUG && /\brequest\b/.test(process.env.NODE_DEBUG)) || this._debug
   }
@@ -137,13 +129,9 @@ class Request extends stream.Duplex {
   pipeDest (dest) {
     const self = this
     const response = self.response
-    // Called after the response is received.
     if (dest.headers && !dest.headersSent) {
       if (dest.setHeader) {
         for (const i of Object.keys(response.headers)) {
-          // If the response content is being decoded, the Content-Encoding
-          // header of the response doesn't represent the piped content, so
-          // don't pass it.
           if (!self.gzip || i.toLowerCase() !== 'content-encoding') {
             dest.setHeader(i, response.headers[i])
           }
@@ -171,18 +159,34 @@ class Request extends stream.Duplex {
       base = {}
     }
 
-    for (const i of Object.keys(q)) {
-      base[i] = q[i]
+    if (typeof URLSearchParams !== 'undefined' && q instanceof URLSearchParams) {
+      for (const [key, value] of q.entries()) {
+        if (base[key] === undefined) {
+          base[key] = value
+        } else if (Array.isArray(base[key])) {
+          base[key].push(value)
+        } else {
+          base[key] = [base[key], value]
+        }
+      }
+    } else if (q && typeof q === 'object') {
+      for (const i of Object.keys(q)) {
+        base[i] = q[i]
+      }
     }
 
     const qs = self._qs.stringify(base)
 
     if (qs === '') {
+      if (clobber && self.uri.search) {
+        self.uri = new URL(self.uri.href)
+        self.uri.search = ''
+        self.url = self.uri
+        self.path = self.uri.pathname
+      }
       return self
     }
 
-    // Set the search component directly so a URL fragment ('#...') is
-    // preserved and the query is not swallowed inside it.
     self.uri = new URL(self.uri.href)
     self.uri.search = qs
     self.url = self.uri
@@ -197,12 +201,15 @@ class Request extends stream.Duplex {
       if (!/^application\/x-www-form-urlencoded\b/.test(self.getHeader('content-type') || '')) {
         self.setHeader('content-type', 'application/x-www-form-urlencoded')
       }
-      self.body = (typeof form === 'string')
-        ? self._qs.rfc3986(form)
-        : self._qs.stringify(form)
+      if (typeof URLSearchParams !== 'undefined' && form instanceof URLSearchParams) {
+        self.body = self._qs.rfc3986(form.toString())
+      } else {
+        self.body = (typeof form === 'string')
+          ? self._qs.rfc3986(form)
+          : self._qs.stringify(form)
+      }
       return self
     }
-    // Create form-data object.
     self._form = new FormData()
     self._form.on('error', function (err) {
       err.message = 'form-data: ' + err.message
@@ -285,6 +292,9 @@ class Request extends stream.Duplex {
       }
       return this
     }
+    if (merge && this.hasHeader(name)) {
+      return this
+    }
     const existing = Object.keys(this.headers).find(function (key) {
       return key.toLowerCase() === name.toLowerCase()
     })
@@ -321,26 +331,19 @@ class Request extends stream.Duplex {
     }
 
     if (!jar) {
-      // Disable cookies.
       cookieString = false
       self._disableCookies = true
     } else {
       const targetCookieJar = jar.getCookieString ? jar : cookies.globalJar
       const urihref = self.uri.href
-      // Fetch cookies in the specified host.
       if (targetCookieJar) {
         cookieString = targetCookieJar.getCookieString(urihref)
       }
     }
 
-    // If need cookie and cookie is not empty.
     if (cookieString && cookieString.length) {
-      // The original Cookie header (from the pre-redirect request) is only
-      // merged back in when we are still talking to the same hostname;
-      // forwarding it to a different host would leak cookies across sites.
       const sameHost = !self.originalHost || self.uri.hostname === self.originalHost.split(':')[0]
       if (self.originalCookieHeader && sameHost) {
-        // Don't overwrite existing Cookie header.
         self.setHeader('cookie', self.originalCookieHeader + '; ' + cookieString)
       } else {
         self.setHeader('cookie', cookieString)
@@ -374,8 +377,8 @@ class Request extends stream.Duplex {
     if (!self._started) {
       self.start()
     }
-    if (self._bodyStream) {
-      return self._bodyStream.end()
+    if (this._bodyStream) {
+      return this._bodyStream.end()
     }
   }
 
@@ -413,15 +416,10 @@ class Request extends stream.Duplex {
     }
   }
 
-  // Promise interface: a Request is a thenable, so it can be awaited or
-  // chained with .then()/.catch()/.finally(). It resolves with the response
-  // (whose .body is populated) once the response is complete.
   then (onFulfilled, onRejected) {
     const self = this
     return new Promise(function (resolve, reject) {
       if (self._errored) {
-        // The request already failed (possibly synchronously, during
-        // construction); reject immediately so the promise never hangs.
         reject(self._error || new Error('Request failed'))
         return
       }
@@ -433,7 +431,6 @@ class Request extends stream.Duplex {
         reject(new Error('Request aborted'))
         return
       }
-      // Collect the body so that response.body is available to the caller.
       self._collect = true
       self._chunks = self._chunks || []
       self.once('complete', function () {
@@ -443,8 +440,6 @@ class Request extends stream.Duplex {
         reject(err)
       })
       self.once('abort', function () {
-        // An error such as ETIMEDOUT is usually emitted right after the
-        // abort; wait one tick so the real error wins when there is one.
         setImmediate(function () {
           reject(new Error('Request aborted'))
         })
@@ -471,7 +466,6 @@ class Request extends stream.Duplex {
     )
   }
 
-  // Stream API
   _read () {
     const source = this.responseContent
     if (source && source.isPaused()) {
@@ -504,5 +498,4 @@ class Request extends stream.Duplex {
 
 Request.prototype.toJSON = requestToJSON
 
-// Exports
 module.exports = Request

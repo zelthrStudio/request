@@ -1,10 +1,5 @@
 'use strict'
 
-// Copyright 2026 zelthrStudio. Licensed under the Apache License, Version 2.0.
-
-// Tiny file extension -> MIME type lookup, replacing the mime-types package
-// for the handful of extensions request actually needs.
-
 const mimes = {
   '.html': 'text/html',
   '.htm': 'text/html',

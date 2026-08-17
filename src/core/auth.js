@@ -1,8 +1,5 @@
 'use strict'
 
-// Modified by zelthrStudio (2026) from the original `request` package
-// (Copyright 2010-2012 Mikeal Rogers, Apache License 2.0).
-
 const crypto = require('crypto')
 const helpers = require('../util').helpers
 
@@ -10,12 +7,8 @@ const md5 = helpers.md5
 const toBase64 = helpers.toBase64
 const caseless = helpers.caseless
 
-// Digest nonce replay counters: one strictly-increasing nc per nonce so a
-// re-challenge with the same nonce does not reuse nc=00000001 (RFC 2617).
 const digestCounters = new Map()
 
-// Challenge values come from a server-controlled header; strip CR/LF and
-// quotes so a hostile realm/nonce cannot inject fake Digest parameters.
 function sanitizeChallenge (value) {
   return String(value).replace(/[\r\n"]/g, '')
 }
@@ -33,6 +26,7 @@ Auth.prototype.basic = function (user, pass, sendImmediately) {
   const self = this
   if (typeof user !== 'string' || (pass !== undefined && typeof pass !== 'string')) {
     self.request.onRequestError(new Error('auth() received invalid user or password'))
+    return
   }
   self.user = user
   self.pass = pass
@@ -58,7 +52,6 @@ Auth.prototype.bearer = function (bearer, sendImmediately) {
 }
 
 Auth.prototype.digest = function (method, path, authHeader) {
-  // RFC 2617 digest authentication (MD5 / MD5-sess with qop=auth).
   const self = this
 
   const challenge = {}
@@ -83,8 +76,6 @@ Auth.prototype.digest = function (method, path, authHeader) {
   const nonceCount = qop && ((digestCounters.get(challenge.nonce) || 0) + 1)
   if (nonceCount) {
     digestCounters.set(challenge.nonce, nonceCount)
-    // A server rotating nonces per request must not leak an entry per
-    // nonce for the process lifetime; evict the oldest past the cap.
     if (digestCounters.size > 1000) {
       digestCounters.delete(digestCounters.keys().next().value)
     }

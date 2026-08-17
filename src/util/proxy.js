@@ -1,11 +1,6 @@
 'use strict'
 
-// Modified by zelthrStudio (2026) from the original `request` package
-// (Copyright 2010-2012 Mikeal Rogers, Apache License 2.0).
-
 function formatHostname (hostname) {
-  // Strip leading dots and lowercase: matching is done on full labels, so
-  // that 'oogle.com' can never match 'google.com'.
   return hostname.replace(/^\.*/, '').toLowerCase()
 }
 
@@ -25,15 +20,16 @@ function uriInNoProxy (uri, noProxy) {
   const hostname = formatHostname(uri.hostname)
   const noProxyList = noProxy.split(',')
 
-  // Iterate through the noProxyList until it finds a match.
   return noProxyList.map(parseNoProxyZone).some(function (noProxyZone) {
-    // A zone must match an entire label sequence: equal hostname, or the
-    // hostname ending in '.' + zone (a suffix check, not a substring one,
-    // so 'oogle.com' does not match 'google.com').
-    const zoneHost = noProxyZone.hostname
+    let zoneHost = noProxyZone.hostname
+    const wildcard = zoneHost.slice(0, 2) === '*.'
+    if (wildcard) {
+      zoneHost = zoneHost.slice(2)
+    }
     const hostnameMatched = (
       zoneHost !== '' &&
-      (hostname === zoneHost || hostname.endsWith('.' + zoneHost))
+      (hostname === zoneHost || hostname.endsWith('.' + zoneHost)) &&
+      (wildcard ? hostname !== zoneHost : true)
     )
 
     if (noProxyZone.hasPort) {
@@ -45,8 +41,6 @@ function uriInNoProxy (uri, noProxy) {
 }
 
 function getProxyFromURI (uri) {
-  // Decide the proper request proxy to use based on the request URI object and
-  // the environmental variables (NO_PROXY, HTTP_PROXY, etc.).
   const noProxy = process.env.NO_PROXY || process.env.no_proxy || ''
 
   if (noProxy === '*') {
@@ -57,16 +51,18 @@ function getProxyFromURI (uri) {
     return null
   }
 
+  const cgi = process.env.REQUEST_METHOD !== undefined
+
   if (uri.protocol === 'http:') {
     return process.env.HTTP_PROXY ||
-      process.env.http_proxy || null
+      (cgi ? null : process.env.http_proxy) || null
   }
 
   if (uri.protocol === 'https:') {
     return process.env.HTTPS_PROXY ||
-      process.env.https_proxy ||
+      (cgi ? null : process.env.https_proxy) ||
       process.env.HTTP_PROXY ||
-      process.env.http_proxy || null
+      (cgi ? null : process.env.http_proxy) || null
   }
 
   return null

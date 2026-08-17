@@ -1,8 +1,5 @@
 'use strict'
 
-// Modified by zelthrStudio (2026) from the original `request` package
-// (Copyright 2010-2012 Mikeal Rogers, Apache License 2.0).
-
 const stream = require('stream')
 
 const helpers = require('../util').helpers
@@ -19,17 +16,12 @@ const caseless = helpers.caseless
 const isReadStream = helpers.isReadStream
 const isstream = helpers.isstream
 
-// init() sets up the request object. The actual outgoing request is not
-// started until start() is called. It is called from the constructor and
-// again on redirect.
 function initRequest (self, options) {
   if (!options) {
     options = {}
   }
   self.headers = self.headers ? copy(self.headers) : {}
 
-  // Delete headers with value undefined since they break
-  // ClientRequest.OutgoingMessage.setHeader.
   for (const headerName of Object.keys(self.headers)) {
     if (typeof self.headers[headerName] === 'undefined') {
       delete self.headers[headerName]
@@ -56,14 +48,10 @@ function initRequest (self, options) {
     self._retry = normalizeRetry(options.retry)
   }
 
-  // Request coalescing: `dedupe: true` merges concurrent identical
-  // GET/HEAD requests onto a single network request.
   if (self._dedupe === undefined) {
     self._dedupe = !!options.dedupe
   }
 
-  // Response schema validation: joi/zod/valibot-style validator or a
-  // plain function, applied after the body is parsed.
   if (self._schema === undefined) {
     self._schema = options.schema || null
   }
@@ -90,7 +78,6 @@ function initRequest (self, options) {
     }
   }
 
-  // Protect against double callback.
   if (!self._callback && self.callback) {
     self._callback = self.callback
     self.callback = function () {
@@ -104,15 +91,15 @@ function initRequest (self, options) {
     self.on('complete', self.callback.bind(self, null))
   }
 
-  // People use this property instead all the time, so support it.
   if (!self.uri && self.url) {
     self.uri = self.url
     delete self.url
   }
 
-  // If there's a baseUrl, then use it as the base URL (i.e. uri must be
-  // specified as a relative path and is appended to baseUrl).
   if (self.baseUrl) {
+    if (self.baseUrl instanceof URL) {
+      self.baseUrl = self.baseUrl.href
+    }
     if (typeof self.baseUrl !== 'string') {
       return self.onRequestError(new Error('options.baseUrl must be a string'))
     }
@@ -125,8 +112,6 @@ function initRequest (self, options) {
       return self.onRequestError(new Error('options.uri must be a path when using options.baseUrl'))
     }
 
-    // Handle all cases to make sure that there's only one slash between
-    // baseUrl and uri.
     const baseUrlEndsWithSlash = self.baseUrl.lastIndexOf('/') === self.baseUrl.length - 1
     const uriStartsWithSlash = self.uri.indexOf('/') === 0
 
@@ -142,12 +127,10 @@ function initRequest (self, options) {
     delete self.baseUrl
   }
 
-  // A URI is needed by this point, emit error if we haven't been able to get one.
   if (!self.uri) {
     return self.onRequestError(new Error('options.uri is a required argument'))
   }
 
-  // If a string URI/URL was given, parse it into a URL object.
   if (typeof self.uri === 'string') {
     try {
       self.uri = new URL(self.uri)
@@ -173,15 +156,8 @@ function initRequest (self, options) {
   }
 
   if (!self.uri.hostname) {
-    // Invalid URI: it may generate a lot of bad errors, like 'TypeError:
-    // Cannot call method `indexOf` of undefined' in CookieJar. Detect and
-    // reject it as soon as possible.
     let message = 'Invalid URI "' + self.uri.href + '"'
     if (Object.keys(options).length === 0) {
-      // No option? This can be the sign of a redirect. As this is a case
-      // where the user cannot do anything (they didn't call request
-      // directly with this URL) they should be warned that it can be caused
-      // by a redirection (can save some hair).
       message += '. This can be caused by a crappy redirection.'
     }
     self._error = new Error(message)
@@ -194,7 +170,6 @@ function initRequest (self, options) {
     self.proxy = getProxyFromURI(self.uri)
   }
 
-  // Normalize proxy into a URL object.
   if (self.proxy && typeof self.proxy === 'string') {
     try {
       self.proxy = new URL(self.proxy)
@@ -262,18 +237,10 @@ function initRequest (self, options) {
     )
   }
 
-  // With gzip handling on, the advertised encodings must match what this
-  // package can decode. A manual accept-encoding may advertise `br` (or
-  // anything else) that gzip decoding cannot handle, silently yielding a
-  // raw compressed body; override it so the server can only send gzip
-  // (or deflate/br, which are decoded) unless gzip is off.
   if (self.gzip) {
-    // `brotli: true` additionally advertises and decodes Brotli responses.
     self.setHeader('accept-encoding', self.brotli ? 'gzip, deflate, br' : 'gzip, deflate')
   }
 
-  // DNS cache / custom lookup: a `lookup` function handed to the transport,
-  // so DNS results are resolved once per TTL instead of per request.
   if (!self.lookup) {
     if (options.dnsCache === true) {
       self.lookup = defaultDnsCache
@@ -286,8 +253,6 @@ function initRequest (self, options) {
     }
   }
 
-  // RFC 7234 HTTP cache: `cache: true` uses the shared store, an HttpCache
-  // instance or `{ ttl, maxEntries }` creates a dedicated one.
   if (!self._cache && options.cache) {
     if (options.cache === true) {
       self._cache = defaultCache
@@ -298,8 +263,6 @@ function initRequest (self, options) {
     }
   }
 
-  // Byte counters for throughput timing and progress events. The counters
-  // are always tracked; events are only emitted when `progress` is set.
   if (!self._progress) {
     self._progress = { received: 0, total: null, uploaded: 0, uploadedTotal: null, start: performance.now() }
     if (options.progress) {
@@ -312,9 +275,6 @@ function initRequest (self, options) {
   }
 
   if (self.uri.username && !self.hasHeader('authorization')) {
-    // The username/password components of a URL are not decoded by the URL
-    // parser; a malformed percent-escape (e.g. "%zz") would throw here and
-    // crash the caller synchronously, so surface it as a request error.
     let uriUser
     let uriPass
     try {
@@ -335,7 +295,6 @@ function initRequest (self, options) {
 
   if (options.time) {
     self.timing = true
-    // NOTE: elapsedTime is deprecated in favor of .timings.
     self.elapsedTime = self.elapsedTime || 0
   }
 
@@ -349,9 +308,6 @@ function initRequest (self, options) {
       if (typeof self.body === 'string') {
         length = Buffer.byteLength(self.body)
       } else if (Array.isArray(self.body)) {
-        // Buffers are counted in bytes; strings are encoded to UTF-8, so
-        // sum byte lengths (not UTF-16 code units) or a non-ASCII body
-        // would be truncated mid-character on the wire.
         length = self.body.reduce(function (a, b) {
           return a + (Buffer.isBuffer(b) ? b.length : Buffer.byteLength(String(b), 'utf8'))
         }, 0)
@@ -361,6 +317,8 @@ function initRequest (self, options) {
 
       if (length) {
         self.setHeader('content-length', length)
+      } else if (self.body === '' || (Array.isArray(self.body) && self.body.length === 0)) {
+        self.setHeader('content-length', 0)
       } else {
         self.onRequestError(new Error('Argument error, options.body.'))
       }
@@ -415,12 +373,9 @@ function initRequest (self, options) {
         if (isstream(self.body)) {
           self.body.pipe(self)
         } else if (self.body.getReader || self.body[Symbol.asyncIterator]) {
-          // Modern streaming: a web ReadableStream or async iterable body.
           const src = self.body.getReader ? stream.Readable.fromWeb(self.body) : stream.Readable.from(self.body)
           src.pipe(self)
         } else if (typeof self.body === 'string' || Buffer.isBuffer(self.body) || Array.isArray(self.body)) {
-          // Replayable bodies are handed directly to the dispatcher in
-          // start(); only the content-length still needs setting here.
           setContentLength()
           self._sendRequest()
         } else {
@@ -446,7 +401,6 @@ function initRequest (self, options) {
     }
 
     if (self._form && !self.hasHeader('content-length')) {
-      // Before ending the request, we had to compute the length of the whole form, asyncly.
       self.setHeader(self._form.getHeaders(), true)
       self._form.getLength(function (err, length) {
         if (!err && !isNaN(length)) {

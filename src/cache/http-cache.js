@@ -1,21 +1,8 @@
 'use strict'
 
-// Copyright 2026 zelthrStudio. Licensed under the Apache License, Version 2.0.
-
-// RFC 7234 HTTP cache: an in-process, in-memory store for GET responses.
-// Fresh entries are served without touching the network; stale entries are
-// revalidated with If-None-Match / If-Modified-Since and refreshed when the
-// server answers 304 Not Modified. The Vary response header is honored by
-// keying entries on the request header values the response declared.
-
 const { makeResponse } = require('../core/fake')
 
-// Status codes cacheable by default (RFC 7234 section 4.2.2).
 const DEFAULT_CACHEABLE = new Set([200, 203, 204, 206, 300, 301, 308, 404, 405, 414, 501])
-
-// Response headers that must not be replayed verbatim when serving a stored
-// body: the body we store is already decoded, and hop-by-hop headers do not
-// make sense across a cache boundary.
 const STRIPPED_HEADERS = ['content-encoding', 'transfer-encoding', 'connection', 'keep-alive', 'set-cookie']
 
 function parseCacheControl (value) {
@@ -64,12 +51,11 @@ class HttpCache {
     this._bytes = 0
   }
 
-  // Look up a stored entry for this request. Returns null on a miss, or
-  // { entry, fresh: true } to serve directly, or { entry, fresh: false,
-  // revalidate: true } when the entry is stale (or must be revalidated).
-  // Entries are grouped per URL, with one variant per Vary key.
   lookup (self) {
     if (self.method !== 'GET') {
+      return null
+    }
+    if (self.hasHeader('cookie') || self.hasHeader('authorization')) {
       return null
     }
     const variants = this._entries.get(self.uri.href)
@@ -88,7 +74,6 @@ class HttpCache {
     return null
   }
 
-  // Add conditional headers so the next attempt revalidates the entry.
   applyRevalidation (self, result) {
     const entry = result.entry
     if (entry.validators.etag && !self.hasHeader('if-none-match')) {
@@ -99,7 +84,6 @@ class HttpCache {
     }
   }
 
-  // Build a response stream from a stored entry.
   serve (self, entry) {
     const response = makeResponse(self, {
       statusCode: entry.statusCode,
@@ -110,12 +94,11 @@ class HttpCache {
     return response
   }
 
-  // Store a completed GET response. Returns nothing; silently skips
-  // responses that must not be cached. Cookie-scoped and `private`
-  // responses are never stored: the shared cache would otherwise serve one
-  // user's session data to other requests for the same URL.
   store (self, response, body) {
     if (self.method !== 'GET') {
+      return
+    }
+    if (self.hasHeader('range')) {
       return
     }
     const statusCode = response.statusCode
@@ -160,16 +143,12 @@ class HttpCache {
       }
     }
     const variants = this._entries.get(self.uri.href) || []
-    // delete-then-set refreshes insertion order, so repeatedly refreshed
-    // URLs are not the first candidates for eviction (LRU-ish behavior).
     this._entries.delete(self.uri.href)
     this._entries.set(self.uri.href, variants.concat(entry))
     this._bytes += body.length
     this._evict()
   }
 
-  // A 304 revalidation response refreshes the stored entry. Returns the
-  // refreshed entry, or null when there is nothing stored to refresh.
   refresh (self, response) {
     const variants = this._entries.get(self.uri.href)
     if (!variants) {
@@ -184,17 +163,14 @@ class HttpCache {
         if (STRIPPED_HEADERS.indexOf(name.toLowerCase()) !== -1) {
           continue
         }
-        // A 304 response carries its own content-length (usually 0); the
-        // stored entry's body length is authoritative and must win. The
-        // validators (etag / last-modified) are never overwritten either:
-        // a 304 has no fresh validators, and losing them would turn every
-        // future revalidation into a full 200.
         if (name.toLowerCase() === 'content-length') {
           continue
         }
         entry.headers[name] = response.headers[name]
       }
-      // Refresh the insertion order so this URL is not evicted first.
+      if (response.headers['cache-control'] !== undefined) {
+        entry.cacheControl = parseCacheControl(response.headers['cache-control'])
+      }
       const variants = this._entries.get(self.uri.href)
       this._entries.delete(self.uri.href)
       this._entries.set(self.uri.href, variants)
@@ -203,8 +179,6 @@ class HttpCache {
     return null
   }
 
-  // Keep the store under maxEntries and maxBytes by evicting from the
-  // least-recently-used URL.
   _evict () {
     while (this.size > this.maxEntries || this._bytes > this.maxBytes) {
       const first = this._entries.keys().next().value
@@ -226,8 +200,6 @@ class HttpCache {
     const cc = entry.cacheControl
     let lifetime = null
     if (cc['max-age'] !== undefined && cc['max-age'] !== true) {
-      // A malformed max-age (e.g. "abc") must not produce NaN, which would
-      // make every entry "stale" forever; fall back to the heuristics.
       const seconds = Number(cc['max-age'])
       if (Number.isFinite(seconds) && seconds >= 0) {
         lifetime = seconds * 1000
@@ -240,8 +212,6 @@ class HttpCache {
       } else if (entry.headers['last-modified']) {
         const lastModified = parseDate(entry.headers['last-modified'])
         if (!Number.isNaN(lastModified) && !Number.isNaN(date)) {
-          // Heuristic freshness (RFC 7234 section 4.2.2): 10% of the time
-          // between last modification and the response date.
           lifetime = Math.floor((date - lastModified) * 0.1)
         }
       }
@@ -266,7 +236,6 @@ class HttpCache {
   }
 }
 
-// Shared instance used by `cache: true`, exposed as request.cache.
 const defaultCache = new HttpCache()
 
 module.exports = { HttpCache, defaultCache }

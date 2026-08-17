@@ -1,7 +1,5 @@
 import type { CoreOptions, RequestCallback, Response, Request } from './index.js'
 
-// Copyright 2026 zelthrStudio. Licensed under the Apache License, Version 2.0.
-
 declare const request: typeof import('./index.js')
 
 export default request
@@ -18,11 +16,15 @@ export const defaults: typeof request.defaults
 export const forever: typeof request.forever
 export const promise: typeof request.promise
 export const paginate: typeof request.paginate
+export const cache: typeof request.cache
+export const mock: typeof request.mock
+export const reset: typeof request.reset
 export const closePool: typeof request.closePool
 export const initParams: typeof request.initParams
 export const Request: typeof request.Request
 export { del as delete }
 
-export type { CoreOptions, RequestCallback, Response }
-export type { RetryOptions, HookOptions, PaginationOptions, BeforeRequestHook, AfterResponseHook, RequestFunction, Defaults, Headers, Static } from './index.js'
+export type { CoreOptions, RequestCallback, Response, Request }
+export type { RetryOptions, HookOptions, PaginationOptions, BeforeRequestHook, AfterResponseHook, RequestFunction, Defaults, Headers, Static, PromiseFunction } from './index.js'
 export type { HttpCache, MockApi, MockSpec, MockMatcher, MockHandler, ProgressEvent, DnsLookup } from './index.js'
+export type { Cookie, CookieJar, CircuitBreakerOptions, RateLimitOptions, SchemaValidator, AuthOptions } from './index.js'

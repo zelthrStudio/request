@@ -1,13 +1,5 @@
 'use strict'
 
-// Modified by zelthrStudio (2026) from the original `request` package
-// (Copyright 2010-2012 Mikeal Rogers, Apache License 2.0).
-
-// Minimal RFC 6265 cookie jar with no external dependencies. Supports
-// parsing Set-Cookie strings, domain/path matching, expiration (Max-Age /
-// Expires) and Secure/HttpOnly flags, plus a sync API matching what request
-// needs (setCookie/getCookieString/getCookies).
-
 function defaultPath (pathname) {
   if (!pathname || pathname === '/') {
     return '/'
@@ -16,9 +8,6 @@ function defaultPath (pathname) {
   return index === 0 ? '/' : pathname.slice(0, index)
 }
 
-// Common two-label public suffixes (ICANN PSL samples). `Domain=co.uk` must
-// not be accepted from `evil.co.uk`; the registrable part of such a domain
-// is a single label.
 const TWO_PART_PUBLIC_SUFFIXES = new Set([
   'co.uk', 'org.uk', 'net.uk', 'gov.uk', 'ac.uk', 'me.uk',
   'com.au', 'net.au', 'org.au', 'edu.au', 'gov.au',
@@ -80,13 +69,16 @@ const TWO_PART_PUBLIC_SUFFIXES = new Set([
   'com.so', 'com.dj', 'com.er', 'com.rw', 'com.bi', 'com.mg',
   'com.mu', 'com.sc', 'com.fj', 'com.pg', 'com.sb', 'com.ws',
   'com.to', 'com.nu', 'com.ck', 'com.tv', 'com.pf', 'com.nc',
-  // African co.* / or.* registrable zones.
   'co.ke', 'or.ke', 'ne.ke', 'co.ug', 'or.ug', 'ne.ug', 'sc.ug',
   'co.tz', 'or.tz', 'ne.tz', 'sc.tz', 'co.rw', 'co.bw', 'co.na',
   'co.zm', 'co.zw', 'co.mw', 'co.mz', 'co.sz', 'co.ls', 'co.bi',
   'co.ao', 'co.mg', 'co.mu', 'co.sc', 'co.sn', 'co.ci',
-  // Central-American registrable zones.
-  'co.cr', 'co.ni', 'co.sv', 'co.hn', 'co.gt', 'co.do', 'co.py', 'co.uy', 'co.ec'
+  'co.cr', 'co.ni', 'co.sv', 'co.hn', 'co.gt', 'co.do', 'co.py', 'co.uy', 'co.ec',
+  'github.io', 'herokuapp.com', 's3.amazonaws.com', 'cloudfront.net',
+  'vercel.app', 'netlify.app', 'workers.dev', 'web.app', 'firebaseapp.com',
+  'azurewebsites.net', 'blogspot.com', 'wordpress.com', 'ngrok-free.app',
+  'ngrok.io', 'trycloudflare.com', 'duckdns.org', 'nip.io', 'sslip.io',
+  'xip.io', 'lvh.me', 'localtest.me', 'vcap.me', 'pages.dev'
 ])
 
 function pathMatches (requestPath, cookiePath) {
@@ -108,6 +100,7 @@ function Cookie (key, value) {
   this.maxAge = null
   this.secure = false
   this.httpOnly = false
+  this.sameSite = null
 }
 
 Object.defineProperty(Cookie.prototype, 'name', {
@@ -122,7 +115,6 @@ Cookie.prototype.toString = function () {
   return this.key + '=' + this.value
 }
 
-// Parse a Set-Cookie string ('name=value; Path=/; HttpOnly').
 function parse (str) {
   if (typeof str !== 'string' || str.length === 0) {
     return null
@@ -172,24 +164,21 @@ function parse (str) {
       case 'httponly':
         cookie.httpOnly = true
         break
+      case 'samesite':
+        cookie.sameSite = val ? val.toLowerCase() : null
+        break
     }
   }
   return cookie
 }
 
-// Upper bound on cookies stored in one jar. Session cookies never expire,
-// so an adversarial server could otherwise grow memory without bound; the
-// oldest stored cookie is dropped when the cap is exceeded.
 const MAX_COOKIES = 1000
 
-// A memory-backed jar with the sync API of a tough-cookie CookieJar.
 class CookieJar {
   constructor () {
     this._cookies = []
   }
 
-  // Drop expired cookies so a server rotating cookie names (session tokens,
-  // per-request nonces) cannot grow the jar without bound.
   _pruneExpired () {
     const now = Date.now()
     this._cookies = this._cookies.filter(function (cookie) {
@@ -197,9 +186,6 @@ class CookieJar {
     })
   }
 
-  // Keep the jar bounded: a server can keep setting fresh session cookies
-  // forever (they never expire, so pruning alone cannot bound the jar).
-  // When the cap is hit the oldest stored cookie is dropped.
   _enforceCap () {
     if (this._cookies.length > MAX_COOKIES) {
       this._cookies.splice(0, this._cookies.length - MAX_COOKIES)
@@ -221,13 +207,6 @@ class CookieJar {
       cookie.domain = uri.hostname.toLowerCase()
       cookie.hostOnly = true
     } else {
-      // RFC 6265 §5.3: a server may only set a Domain attribute that
-      // domain-matches the request host, otherwise any server could plant
-      // cookies for unrelated hosts into the (shared/global) jar. Without a
-      // full public-suffix list, single-label domains ("com", "net", ...)
-      // and common two-label public suffixes ("co.uk", "com.au", ...) are
-      // rejected unless they are the request host itself, closing the
-      // `Domain=com` / `Domain=co.uk`-style poisoning variants.
       const host = uri.hostname.toLowerCase()
       const domain = cookie.domain.toLowerCase()
       const domainMatches = host === domain || host.endsWith('.' + domain)
@@ -245,23 +224,18 @@ class CookieJar {
     if (!cookie.path) {
       cookie.path = defaultPath(uri.pathname)
     }
-    // An unparseable Max-Age (e.g. "Max-Age=abc") is not a session cookie:
-    // the server clearly wanted an expiry it could not express. Keeping it
-    // forever would poison the jar; drop it instead.
     if (cookie.maxAge !== null && isNaN(cookie.maxAge)) {
       return
     }
     if (cookie.maxAge !== null && !isNaN(cookie.maxAge)) {
       cookie.expires = new Date(Date.now() + cookie.maxAge * 1000)
     }
-    // A cookie with a past expiry is deleted, not stored.
     if (cookie.expires && cookie.expires.getTime() < Date.now()) {
       this._cookies = this._cookies.filter(function (c) {
         return !(c.key === cookie.key && c.domain === cookie.domain && c.path === cookie.path)
       })
       return
     }
-    // Replace any existing cookie with the same key/domain/path.
     this._cookies = this._cookies.filter(function (c) {
       return !(c.key === cookie.key && c.domain === cookie.domain && c.path === cookie.path)
     })
@@ -309,8 +283,6 @@ class CookieJar {
   }
 }
 
-// Adapt the (sync) jar API used by request. A tough-cookie store argument is
-// accepted for compatibility but ignored; storage is always in memory.
 function RequestJar (store) {
   this._jar = new CookieJar()
   this._store = store
@@ -336,5 +308,4 @@ exports.jar = function (store) {
   return new RequestJar(store)
 }
 
-// Global jar used to persist cookies across requests unless a jar is passed.
 exports.globalJar = new RequestJar()

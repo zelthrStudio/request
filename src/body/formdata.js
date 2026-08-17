@@ -1,17 +1,8 @@
 'use strict'
 
-// Copyright 2026 zelthrStudio. Licensed under the Apache License, Version 2.0.
-
 const { EventEmitter } = require('events')
 const crypto = require('crypto')
 
-// Minimal form-data replacement: multipart/form-data construction with the
-// append()/getHeaders()/getLength()/pipe() API, replacing the form-data
-// package. Stream values need a knownLength so the body length can be
-// computed (matching form-data behavior).
-
-// Strip characters that would break out of the Content-Disposition header:
-// quotes and CR/LF are the injection vector for forged multipart headers.
 function sanitizeToken (value) {
   return String(value).replace(/["\r\n]/g, '')
 }

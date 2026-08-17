@@ -1,15 +1,7 @@
 'use strict'
 
-// Copyright 2026 zelthrStudio. Licensed under the Apache License, Version 2.0.
-
-// TLS/socket options shared between the connection pool (agents keyed by
-// these) and the HTTP/2 session pool.
-
 const crypto = require('crypto')
 
-// `lookup` is part of the key so a custom DNS resolver (DNS pinning, SSRF
-// guards) is never silently bypassed by reusing a socket pooled by a request
-// without it.
 const connectKeys = ['ca', 'rejectUnauthorized', 'cert', 'key', 'pfx', 'passphrase', 'ciphers', 'secureProtocol', 'secureOptions', 'checkServerIdentity', 'localAddress', 'family', 'lookup']
 
 function connectOptions (self) {
@@ -22,9 +14,6 @@ function connectOptions (self) {
   return options
 }
 
-// Stable ids for function-valued options (checkServerIdentity, lookup): two
-// distinct functions with the same arity must not collapse to the same pool
-// key.
 const fnIds = new WeakMap()
 let nextFnId = 0
 
@@ -37,16 +26,10 @@ function fnId (fn) {
   return id
 }
 
-// Certificates are reused across requests (the same `ca`/`cert` Buffer is
-// passed to every request with the same options); hash each Buffer once
-// instead of re-hashing the full buffer on every request. A WeakMap keeps
-// the cache alive only as long as the caller keeps the Buffer.
 const bufferHashes = new WeakMap()
 
 function hashValue (value) {
   if (Buffer.isBuffer(value)) {
-    // Hash the full buffer: a 32-byte truncation of a hex digest would let
-    // different CAs with a shared prefix reuse an agent.
     let hash = bufferHashes.get(value)
     if (hash === undefined) {
       hash = 'buf:' + value.length + ':' + crypto.createHash('sha256').update(value).digest('hex')
@@ -57,9 +40,6 @@ function hashValue (value) {
   return 'str:' + crypto.createHash('sha256').update(String(value)).digest('hex')
 }
 
-// A stable string that identifies a unique set of connect options, so pools
-// can be keyed per TLS configuration (ca, client certs, ...) without those
-// settings leaking between requests.
 function connectSignature (self, connect) {
   const keys = Object.keys(connect).sort()
   if (keys.length === 0) {
@@ -80,10 +60,6 @@ function connectSignature (self, connect) {
   return parts.join('&')
 }
 
-// A stable serialization of an arbitrary options object: distinct functions
-// keep distinct identities, Buffers are hashed once, and key order does not
-// matter. Unlike JSON.stringify this never collapses two different function
-// values onto the same key (JSON.stringify drops functions entirely).
 function stableValue (value) {
   if (typeof value === 'function') {
     return 'fn:' + fnId(value)

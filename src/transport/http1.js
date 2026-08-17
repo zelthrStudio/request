@@ -1,7 +1,5 @@
 'use strict'
 
-// Copyright 2026 zelthrStudio. Licensed under the Apache License, Version 2.0.
-
 const http = require('http')
 const https = require('https')
 
@@ -19,8 +17,6 @@ function proxyAuthHeader (proxy) {
   if (!proxy || !proxy.username) {
     return null
   }
-  // A malformed percent-escape in the proxy credentials must not throw
-  // synchronously out of the transport; skip the Proxy-Authorization header.
   try {
     const user = decodeURIComponent(proxy.username)
     const pass = decodeURIComponent(proxy.password || '')
@@ -65,8 +61,6 @@ function buildOptions (self, extraHeaders) {
   return options
 }
 
-// HTTP through an HTTP proxy uses the absolute-form request line and sends
-// the target host in the Host header plus Proxy-Authorization credentials.
 function proxyRequestOptions (self) {
   const proxy = self.proxy
   const headers = Object.assign({}, self.headers)
@@ -79,15 +73,11 @@ function proxyRequestOptions (self) {
   options.hostname = proxy.hostname
   options.port = proxy.port || (proxy.protocol === 'https:' ? 443 : 80)
   options.protocol = proxy.protocol
-  // Absolute-form request line. The target URL's credentials (user:pass@)
-  // must not be sent to the proxy, and the fragment is never part of the
-  // request.
   options.path = self.uri.protocol + '//' + self.uri.host +
     (self.uri.pathname + (self.uri.search || ''))
   return options
 }
 
-// CONNECT tunnel to the target through the proxy, used for https: targets.
 function connectTunnel (self) {
   return new Promise(function (resolve, reject) {
     const proxy = self.proxy
@@ -118,9 +108,6 @@ function connectTunnel (self) {
     req.on('error', reject)
     req.end()
 
-    // A proxy that accepts TCP but never answers CONNECT would otherwise
-    // leave the promise pending forever, regardless of `timeout` (the
-    // request timeout only kicks in after the tunnel is established).
     if (self.timeout) {
       req.setTimeout(self.timeout, function () {
         req.destroy(makeTimeoutError(true))
@@ -138,9 +125,6 @@ function connectTunnel (self) {
   })
 }
 
-// Track the request currently using each pooled socket, and which sockets
-// already have an idle-timeout handler wired, so keep-alive reuse does not
-// pile up one 'timeout' listener per request.
 const socketOwners = new WeakMap()
 const handledSockets = new WeakSet()
 
@@ -181,15 +165,10 @@ function http1Dispatch (self) {
         if (self.timing) {
           self.timings.response = performance.now() - self.startTimeNow
         }
-        // Clear the idle timeout before a keep-alive socket is reused.
         response.on('end', function () {
           if (socketRef) {
             socketRef.setTimeout(0)
           }
-          // Tunneled sockets are not pooled; make sure the tunnel closes so
-          // servers and proxies can shut down cleanly. Destroying the TLS
-          // wrapper does not tear down the raw CONNECT socket, so both are
-          // closed here.
           if (self._tunneled) {
             if (socketRef && !socketRef.destroyed) {
               socketRef.destroy()
@@ -222,7 +201,6 @@ function http1Dispatch (self) {
     if (self.proxy && self.uri.protocol === 'http:') {
       dispatchDirect(proxyRequestOptions(self))
     } else if (self.proxy) {
-      // https: target -> CONNECT tunnel, then TLS over the tunneled socket.
       self._tunneled = true
       connectTunnel(self).then(function (socket) {
         rawSocket = socket
@@ -243,7 +221,6 @@ function dispatch (self) {
   if (self.http2) {
     return h2.dispatch(self).then(function (result) {
       if (result === null) {
-        // The server negotiated http/1.1 over ALPN.
         return http1Dispatch(self)
       }
       return result

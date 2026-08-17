@@ -1,12 +1,5 @@
 'use strict'
 
-// Copyright 2026 zelthrStudio. Licensed under the Apache License, Version 2.0.
-
-// Minimal qs-compatible query string encoder/decoder. Supports nested
-// objects and arrays using bracket notation (a[b]=c, a[0]=x), with
-// configurable separators. Replaces the `qs` package for the common cases
-// request exposes (qs, form, qsParseOptions/qsStringifyOptions).
-
 function encode (str) {
   return encodeURIComponent(String(str)).replace(/[!'()*]/g, function (c) {
     return '%' + c.charCodeAt(0).toString(16).toUpperCase()
@@ -27,9 +20,18 @@ function stringify (obj, options) {
   const eq = options.eq || '='
   const parts = []
 
-  // `ancestors` tracks the object graph currently being visited, so a
-  // circular reference raises a clear error instead of overflowing the
-  // call stack.
+  if (typeof URLSearchParams !== 'undefined' && obj instanceof URLSearchParams) {
+    return obj.toString()
+  }
+
+  if (typeof obj === 'string') {
+    return obj
+  }
+
+  if (!obj || typeof obj !== 'object') {
+    return ''
+  }
+
   const visit = function (prefix, value, ancestors) {
     if (value === null || value === undefined) {
       return
@@ -82,17 +84,16 @@ function parse (str, options) {
     return result
   }
 
-  // Prototype-pollution guard: skip any key whose bracket path touches
-  // __proto__ / constructor / prototype, at any nesting depth.
   const unsafeKey = /(^|\[)(__proto__|constructor|prototype)(\]|\[|$)/i
+
+  const isArrayIndex = function (k) {
+    return k === '' || (/^\d+$/.test(k) && Number(k) <= 1000)
+  }
 
   const append = function (target, key, value) {
     if (key === '') {
       return
     }
-    // hasOwnProperty (not a truthiness check): an inherited property such
-    // as `toString` must not be treated as an existing value, which would
-    // corrupt parsed output into a [function, value] pair.
     if (!Object.prototype.hasOwnProperty.call(target, key)) {
       target[key] = value
     } else if (Array.isArray(target[key])) {
@@ -123,16 +124,11 @@ function parse (str, options) {
         k = k.slice(0, -1)
       }
       const nextKey = keys[i + 1].replace(/\]/g, '')
-      // Only allocate when nothing is there yet: re-wrapping an existing
-      // array would wipe values already parsed by earlier pairs
-      // (a[0]=1&a[1]=2 must yield ['1','2'], not ['2']).
       if (target[k] === undefined) {
-        target[k] = (nextKey === '' || /^\d+$/.test(nextKey)) ? [] : {}
+        target[k] = isArrayIndex(nextKey) ? [] : {}
       } else if (typeof target[k] !== 'object') {
-        target[k] = (nextKey === '' || /^\d+$/.test(nextKey)) ? [target[k]] : {}
-      } else if (Array.isArray(target[k]) && nextKey !== '' && !/^\d+$/.test(nextKey)) {
-        // a[0]=1&a[x]=2 -> { '0': '1', x: '2' }: keep the numeric entries
-        // while switching to an object for the non-index key.
+        target[k] = isArrayIndex(nextKey) ? [target[k]] : {}
+      } else if (Array.isArray(target[k]) && !isArrayIndex(nextKey)) {
         const obj = {}
         target[k].forEach(function (item, index) {
           obj[index] = item
@@ -146,8 +142,6 @@ function parse (str, options) {
       last = last.slice(0, -1)
     }
     if (last === '') {
-      // Root-level empty key ('=value'): nothing sensible to attach it to,
-      // so skip it instead of crashing on result.push().
       if (Array.isArray(target)) {
         target.push(value)
       }

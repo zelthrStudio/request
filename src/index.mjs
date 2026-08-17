@@ -1,7 +1,5 @@
 import request from './index.js'
 
-// Copyright 2026 zelthrStudio. Licensed under the Apache License, Version 2.0.
-
 export default request
 export const get = request.get
 export const head = request.head
@@ -16,6 +14,9 @@ export const defaults = request.defaults
 export const forever = request.forever
 export const promise = request.promise
 export const paginate = request.paginate
+export const cache = request.cache
+export const mock = request.mock
+export const reset = request.reset
 export const closePool = request.closePool
 export const initParams = request.initParams
 export const Request = request.Request

@@ -1,18 +1,10 @@
 'use strict'
 
-// Copyright 2026 zelthrStudio. Licensed under the Apache License, Version 2.0.
-
-// Built-in retry support, modeled after Got. Opt-in via `retry: true` or a
-// configuration object; never retried unless the request body is replayable.
-// Only safe (idempotent) methods are retried by default: PUT/DELETE can
-// duplicate side effects if the first attempt reached the server but the
-// response was lost. Callers that own the idempotency (e.g. an explicit
-// idempotency key on the endpoint) can opt back in via `methods`.
 const retryDefaults = {
   limit: 3,
   methods: ['GET', 'HEAD', 'OPTIONS'],
   statusCodes: [429, 503],
-  errorCodes: ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ESOCKETTIMEDOUT', 'EPIPE'],
+  errorCodes: ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ESOCKETTIMEDOUT', 'EPIPE', 'ERR_HTTP2_STREAM_ERROR', 'ERR_HTTP2_SESSION_ERROR', 'ERR_HTTP2_GOAWAY_SESSION'],
   maxRetryAfter: 30000,
   backoff: 1000,
   jitter: false
@@ -41,6 +33,9 @@ function normalizeRetry (value) {
 
 function canRetry (self) {
   if (!self._retry || self._aborted) {
+    return false
+  }
+  if (self.response && self.response.fromDedupe) {
     return false
   }
   if (self._retryAttempts >= self._retry.limit) {
@@ -72,8 +67,6 @@ function shouldRetryStatus (self, statusCode) {
   return true
 }
 
-// Delay before the next attempt. Honors the Retry-After header (capped by
-// maxRetryAfter), falling back to an exponential backoff.
 function retryDelay (self, error, response) {
   const retry = self._retry
   let delay
@@ -110,7 +103,10 @@ function retryDelay (self, error, response) {
     delay += Math.random() * amount
   }
 
-  return delay
+  if (!Number.isFinite(delay) || delay <= 0) {
+    return 1
+  }
+  return Math.min(Math.round(delay), 2147483647)
 }
 
 module.exports = { normalizeRetry, shouldRetryError, shouldRetryStatus, retryDelay }

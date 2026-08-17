@@ -1,14 +1,9 @@
 'use strict'
 
-// Copyright 2026 zelthrStudio. Licensed under the Apache License, Version 2.0.
-
 const stream = require('stream')
 
 const { responseToJSON } = require('../util').serialization
 
-// Build a synthetic response stream (statusCode, headers, body) that flows
-// through the normal response pipeline. Used by the mocking layer and the
-// RFC 7234 cache when serving a stored response without touching the network.
 function makeResponse (self, spec) {
   let body = spec.body
   if (body === undefined || body === null) {
@@ -27,10 +22,6 @@ function makeResponse (self, spec) {
   } else if (typeof body.pipe === 'function') {
     response = body
   } else {
-    // A mock body must be a replayable value. A plain object (e.g. a
-    // handler that returns `{ body: { foo: 1 } }`) would otherwise become
-    // a silently empty body; fail loudly so the mismatch is caught where
-    // the mock is defined.
     throw new Error('mock response body must be a string, Buffer, or stream (got ' + (body === null ? 'null' : typeof body) + ')')
   }
   response.statusCode = spec.statusCode !== undefined ? spec.statusCode : 200

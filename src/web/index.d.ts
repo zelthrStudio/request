@@ -1,28 +1,17 @@
 /// <reference lib="dom" />
 
-// Copyright 2026 zelthrStudio. Licensed under the Apache License, Version 2.0.
-
-// Web & Edge runtime entry (@zelthr/request/web, alias ./edge): a
-// fetch-based client for Next.js middleware/Edge, Vercel Edge Functions,
-// Cloudflare Workers, Deno and browsers. Responses are buffered plain
-// objects (no Node streams).
-
 declare const request: requestWeb.Static
 
 declare namespace requestWeb {
   type Headers = Record<string, string | string[] | undefined>
 
   interface CircuitBreakerOptions {
-    /** Consecutive failures before the circuit opens. @default 5 */
     threshold?: number
-    /** Cooldown in ms before a half-open probe is allowed. @default 30000 */
     cooldown?: number
   }
 
   interface RateLimitOptions {
-    /** Requests per second per host. @default 10 */
     rate?: number
-    /** Burst capacity (how many requests may start at once). @default rate */
     capacity?: number
   }
 
@@ -36,11 +25,11 @@ declare namespace requestWeb {
     uri?: string | URL
     url?: string | URL
     method?: string
-    baseUrl?: string
+    baseUrl?: string | URL
     headers?: Headers
     body?: string | Uint8Array | ArrayBuffer | Blob | FormData | URLSearchParams | ReadableStream
-    qs?: Record<string, any>
-    form?: Record<string, any> | string
+    qs?: Record<string, any> | string | URLSearchParams
+    form?: Record<string, any> | string | URLSearchParams
     formData?: FormData
     json?: any | boolean
     auth?: {
@@ -53,22 +42,16 @@ declare namespace requestWeb {
     }
     timeout?: number
     time?: boolean
-    /** Maximum collected response-body bytes; errors with code `EBODYLIMIT`. */
     maxBytes?: number
     encoding?: string | null
     followRedirect?: boolean | ((response: WebResponse) => boolean)
     followAllRedirects?: boolean
     followOriginalHttpMethod?: boolean
     maxRedirects?: number
-    /** Coalesce concurrent identical GET/HEAD requests onto one fetch. */
     dedupe?: boolean
-    /** Validate the parsed response body (joi/zod/valibot-style validator or a function). */
     schema?: SchemaValidator
-    /** Fail fast per host after repeated failures: true (defaults), threshold, or options. */
     circuitBreaker?: boolean | number | CircuitBreakerOptions
-    /** Per-host request rate: true (defaults), req/sec, or { rate, capacity }. */
     rateLimit?: boolean | number | RateLimitOptions
-    /** `gzip` is a no-op: fetch advertises accept-encoding and decompresses automatically. */
     gzip?: boolean
     hooks?: {
       beforeRequest?: (request: WebRequest) => any | Array<(request: WebRequest) => any>
@@ -84,11 +67,21 @@ declare namespace requestWeb {
     body: any
     request: WebRequest
     toJSON (): any
-    /** True when the response was replayed by in-flight request deduplication. */
     fromDedupe?: boolean
-    /** Total wall-clock time in ms when `time: true`. */
     elapsedTime?: number
     timings?: { total: number }
+  }
+
+  interface PromiseFunction {
+    (uri: string | URL | WebOptions, options?: WebOptions): Promise<WebResponse>
+    get (uri: string | URL | WebOptions, options?: WebOptions): Promise<WebResponse>
+    head (uri: string | URL | WebOptions, options?: WebOptions): Promise<WebResponse>
+    options (uri: string | URL | WebOptions, options?: WebOptions): Promise<WebResponse>
+    post (uri: string | URL | WebOptions, options?: WebOptions): Promise<WebResponse>
+    put (uri: string | URL | WebOptions, options?: WebOptions): Promise<WebResponse>
+    patch (uri: string | URL | WebOptions, options?: WebOptions): Promise<WebResponse>
+    del (uri: string | URL | WebOptions, options?: WebOptions): Promise<WebResponse>
+    delete (uri: string | URL | WebOptions, options?: WebOptions): Promise<WebResponse>
   }
 
   interface WebRequest {
@@ -100,7 +93,11 @@ declare namespace requestWeb {
     setHeader (headers: Headers, merge?: boolean): this
     getHeader (name: string): string | string[] | undefined
     hasHeader (name: string): boolean
-    removeHeader (name: string): void
+    removeHeader (name: string): this
+    qs (q: Record<string, any> | string | URLSearchParams, clobber?: boolean): this
+    form (form?: Record<string, any> | string | URLSearchParams): this
+    json (val?: any): this
+    auth (user: string, pass?: string, sendImmediately?: boolean, bearer?: string): this
     abort (): void
     start (): void
     on (event: string, listener: (...args: any[]) => void): this
@@ -127,7 +124,8 @@ declare namespace requestWeb {
     patch: RequestFunction
     del: RequestFunction
     delete: RequestFunction
-    promise: (uri: string | URL | WebOptions, options?: WebOptions) => Promise<WebResponse>
+    promise: PromiseFunction
+    defaults (options: WebOptions): Defaults
   }
 
   interface Static {
@@ -143,8 +141,10 @@ declare namespace requestWeb {
     patch: RequestFunction
     del: RequestFunction
     delete: RequestFunction
-    promise: (uri: string | URL | WebOptions, options?: WebOptions) => Promise<WebResponse>
+    promise: PromiseFunction
     defaults: (options: WebOptions) => Defaults
+    initParams: (uri: string | URL | WebOptions, options?: WebOptions, callback?: RequestCallback) => WebOptions
+    Request: new (options: WebOptions) => WebRequest
   }
 
   type RequestFunction = (uri: string | URL | WebOptions, options?: WebOptions, callback?: RequestCallback) => WebRequest
