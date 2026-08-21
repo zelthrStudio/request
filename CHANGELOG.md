@@ -1,5 +1,54 @@
 # Change Log
 
+## [1.7.0] — 2026-08-18 — stability fixes + throughput optimization pass
+
+### Fixed
+
+- **Request hang on response-handler throw:** a throwing `afterResponse` hook
+  or response handler used to reject the internal promise that
+  `safeRunAttempt` swallowed, leaving the request pending forever with no
+  `error`/`complete`. The final `onRequestResponse` in the dispatch path now
+  surfaces those throws as request errors.
+- **HTTP/2 sync throw:** `session.request()` can throw synchronously when the
+  session is torn down between `getSession()` resolving and the call; that
+  used to escape the Promise executor as an uncaught exception. It now
+  rejects normally.
+- **Rate-limiter token double-spend:** a waiter whose bucket was evicted
+  (1000+ hosts) kept spending tokens from a detached bucket, bypassing the
+  limiter. Waiters now re-fetch the live bucket on every poll.
+- **DNS lookup stampede:** concurrent lookups for the same cold hostname each
+  issued their own `dns.lookup`. They now coalesce onto a single resolution
+  that serves every waiter.
+- **Backpressure never applied:** `handleResponseData` paused the response
+  content only when it was *already* paused, so a slow consumer let the source
+  run unbounded. It now pauses correctly when the push returns backpressure
+  (and skips pushing entirely when nobody is consuming, e.g. collect mode).
+- **Empty `Buffer.alloc(0)` body threw** `Argument error, options.body.`;
+  it is now treated as `content-length: 0`.
+- **Web dedupe cross-eviction delete:** `deliverDedupe`/`failDedupe`
+  deleted `inFlight[key]` unconditionally, which could remove a *newer* entry
+  that reused the key after eviction. Deletes now check identity.
+
+### Changed
+
+- Headers use an O(1) lowercase-name index instead of an
+  `Object.keys().find()` scan on every `get/set/has/removeHeader`.
+- `defer` (request start) uses `queueMicrotask` instead of `setImmediate`,
+  removing one full event-loop turn per request.
+- `Multipart`, the `AbortController`, `_progress` and `_hooks` are created
+  lazily, so plain requests no longer pay `crypto.randomBytes()`, an
+  `AbortController`, a progress object or the hooks table on every request.
+- Single-chunk collected bodies skip `Buffer.concat` (no copy).
+- Empty-header init skips the index rebuild loop.
+- The mock resolver has a synchronous fast path when no handlers are
+  registered (no per-request Promise allocation).
+
+## [1.6.0] — 2026-08-17 — audit enhancements, type declarations
+
+- Audit hardening across core, body, cache and cookie internals.
+- Added TypeScript type declarations for the Node entry.
+- Cleanup of dead code and stale comments.
+
 ## [1.5.0] — 2026-08-16 — audit pass 4: dedupe credentials, rate-limit validation, JSON parse errors
 
 ### Fixed

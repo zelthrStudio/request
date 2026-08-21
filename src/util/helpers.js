@@ -3,7 +3,14 @@
 const crypto = require('crypto')
 
 function defer (fn) {
-  return typeof setImmediate === 'function' ? setImmediate(fn) : process.nextTick(fn)
+  // queueMicrotask runs after the caller's synchronous code (so listeners
+  // and .pipe() attached right after request() returns are registered first)
+  // but without forcing a full event-loop turn like setImmediate does. This
+  // keeps the start-after-construction contract while cutting one loop turn
+  // per request on the hot path.
+  return typeof queueMicrotask === 'function'
+    ? queueMicrotask(fn)
+    : (typeof setImmediate === 'function' ? setImmediate(fn) : process.nextTick(fn))
 }
 
 function isPlainObject (obj) {

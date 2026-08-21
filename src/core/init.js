@@ -12,7 +12,6 @@ const mime = require('../body').mime
 
 const copy = helpers.copy
 const defer = helpers.defer
-const caseless = helpers.caseless
 const isReadStream = helpers.isReadStream
 const isstream = helpers.isstream
 
@@ -22,13 +21,23 @@ function initRequest (self, options) {
   }
   self.headers = self.headers ? copy(self.headers) : {}
 
-  for (const headerName of Object.keys(self.headers)) {
-    if (typeof self.headers[headerName] === 'undefined') {
-      delete self.headers[headerName]
+  // Single pass: drop undefined-valued headers and rebuild the
+  // lowercase-name -> actual-name index so case-insensitive lookups stay
+  // O(1) and consistent after the copy. Skip the loop entirely when there
+  // are no headers (the common case).
+  const headerNames = self._headerNames || new Map()
+  headerNames.clear()
+  const headerKeys = Object.keys(self.headers)
+  if (headerKeys.length > 0) {
+    for (const headerName of headerKeys) {
+      if (typeof self.headers[headerName] === 'undefined') {
+        delete self.headers[headerName]
+      } else {
+        headerNames.set(headerName.toLowerCase(), headerName)
+      }
     }
   }
-
-  self._caseless = caseless(self.headers)
+  self._headerNames = headerNames
 
   if (!self.method) {
     self.method = options.method || 'GET'
@@ -64,16 +73,14 @@ function initRequest (self, options) {
     self._rateLimit = normalizeRateLimit(options.rateLimit)
   }
 
-  if (!self._hooks) {
+  if (!self._hooks && options.hooks) {
     self._hooks = { beforeRequest: [], afterResponse: [] }
-    if (options.hooks) {
-      for (const name of ['beforeRequest', 'afterResponse']) {
-        const value = options.hooks[name]
-        if (Array.isArray(value)) {
-          self._hooks[name] = self._hooks[name].concat(value)
-        } else if (typeof value === 'function') {
-          self._hooks[name].push(value)
-        }
+    for (const name of ['beforeRequest', 'afterResponse']) {
+      const value = options.hooks[name]
+      if (Array.isArray(value)) {
+        self._hooks[name] = self._hooks[name].concat(value)
+      } else if (typeof value === 'function') {
+        self._hooks[name].push(value)
       }
     }
   }
@@ -263,7 +270,7 @@ function initRequest (self, options) {
     }
   }
 
-  if (!self._progress) {
+  if (!self._progress && (options.progress || options.time)) {
     self._progress = { received: 0, total: null, uploaded: 0, uploadedTotal: null, start: performance.now() }
     if (options.progress) {
       self.progress = true
@@ -317,7 +324,11 @@ function initRequest (self, options) {
 
       if (length) {
         self.setHeader('content-length', length)
-      } else if (self.body === '' || (Array.isArray(self.body) && self.body.length === 0)) {
+      } else if (
+        self.body === '' ||
+        (Array.isArray(self.body) && self.body.length === 0) ||
+        (Buffer.isBuffer(self.body) && self.body.length === 0)
+      ) {
         self.setHeader('content-length', 0)
       } else {
         self.onRequestError(new Error('Argument error, options.body.'))

@@ -128,19 +128,28 @@ function normalizeRateLimit (value) {
   return { rate, capacity }
 }
 
-function rateAcquire (self) {
-  const cfg = self._rateLimit
-  const key = stateKey(self)
+function refillBucket (bucket, cfg, now) {
+  bucket.tokens = Math.min(cfg.capacity, bucket.tokens + ((now - bucket.last) / 1000) * cfg.rate)
+  bucket.last = now
+  return bucket
+}
+
+function getOrCreateBucket (key, cfg, now) {
   let bucket = buckets.get(key)
-  const now = Date.now()
   if (!bucket) {
     bucket = { tokens: cfg.capacity, last: now }
     buckets.set(key, bucket)
     evictIfNeeded(buckets)
   } else {
-    bucket.tokens = Math.min(cfg.capacity, bucket.tokens + ((now - bucket.last) / 1000) * cfg.rate)
-    bucket.last = now
+    refillBucket(bucket, cfg, now)
   }
+  return bucket
+}
+
+function rateAcquire (self) {
+  const cfg = self._rateLimit
+  const key = stateKey(self)
+  const bucket = getOrCreateBucket(key, cfg, Date.now())
   if (bucket.tokens >= 1) {
     bucket.tokens -= 1
     return Promise.resolve()
@@ -162,15 +171,16 @@ function rateAcquire (self) {
         signal.removeEventListener('abort', onAbort)
         return reject(makeAbortError())
       }
-      const now = Date.now()
-      bucket.tokens = Math.min(cfg.capacity, bucket.tokens + ((now - bucket.last) / 1000) * cfg.rate)
-      bucket.last = now
-      if (bucket.tokens >= 1) {
-        bucket.tokens -= 1
+      // Re-fetch the live bucket: the one captured earlier may have been
+      // evicted and replaced while we waited, and spending a token on a
+      // detached bucket would bypass the limiter.
+      const current = getOrCreateBucket(key, cfg, Date.now())
+      if (current.tokens >= 1) {
+        current.tokens -= 1
         signal.removeEventListener('abort', onAbort)
         return resolve()
       }
-      timer = setTimeout(step, clampDelay(Math.ceil(((1 - bucket.tokens) / cfg.rate) * 1000)))
+      timer = setTimeout(step, clampDelay(Math.ceil(((1 - current.tokens) / cfg.rate) * 1000)))
     }
     timer = setTimeout(step, clampDelay(Math.ceil(((1 - bucket.tokens) / cfg.rate) * 1000)))
     signal.addEventListener('abort', onAbort, { once: true })

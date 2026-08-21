@@ -670,7 +670,7 @@ class WebRequest {
     if (location === undefined) {
       return null
     }
-    if (location.charAt(0) === '<') {
+    if (/[<>]/.test(String(location))) {
       return null
     }
     let target
@@ -890,7 +890,11 @@ function deliverDedupe (primary, body) {
     return
   }
   primary._dedupeEntry = null
-  inFlight.delete(entry.key)
+  // Only remove the map slot if it still points at this entry; a newer
+  // request may have re-registered under the same key after eviction.
+  if (inFlight.get(entry.key) === entry) {
+    inFlight.delete(entry.key)
+  }
   for (const waiter of entry.waiters) {
     if (waiter._aborted) {
       continue
@@ -912,7 +916,9 @@ function failDedupe (primary, err) {
     return
   }
   primary._dedupeEntry = null
-  inFlight.delete(entry.key)
+  if (inFlight.get(entry.key) === entry) {
+    inFlight.delete(entry.key)
+  }
   for (const waiter of entry.waiters) {
     if (!waiter._aborted) {
       waiter._fail(err)

@@ -122,7 +122,11 @@ function getSession (self) {
         sessions.set(key, result.session)
       }
     }, function () {
-      sessions.delete(key)
+      // Only clear the slot if it still holds this attempt; a newer
+      // connection may have replaced it while this one was failing.
+      if (sessions.get(key) === connecting) {
+        sessions.delete(key)
+      }
     })
     connecting.then(resolve, reject)
   })
@@ -170,7 +174,15 @@ function dispatchStream (self, session) {
       }
     }
 
-    const stream = session.request(h2Headers(self))
+    let stream
+    try {
+      stream = session.request(h2Headers(self))
+    } catch (err) {
+      // The session can be destroyed between getSession() resolving and this
+      // call; session.request() then throws synchronously. Reject instead of
+      // letting it escape the Promise executor as an uncaught exception.
+      return reject(err)
+    }
     self.req = stream
 
     if (self.timeout) {

@@ -29,15 +29,21 @@ function startRequest (self) {
 
   self.debug('make request', self.uri.href)
 
-  self._bodyStream = self._bodyStream || new stream.PassThrough()
-  self._bodyStream.on('drain', function () {
-    self.emit('drain')
-  })
-  self._bodyStream.on('error', function (err) {
-    if (!self._aborted) {
-      self.emit('error', err)
-    }
-  })
+  // The body PassThrough is only needed when the body actually streams
+  // (explicit writes or a piped source). Plain string/Buffer bodies are
+  // written directly to the transport, so skip the allocation and its
+  // listeners for the common case.
+  if (self._hasWrites || self.src) {
+    self._bodyStream = self._bodyStream || new stream.PassThrough()
+    self._bodyStream.on('drain', function () {
+      self.emit('drain')
+    })
+    self._bodyStream.on('error', function (err) {
+      if (!self._aborted) {
+        self.emit('error', err)
+      }
+    })
+  }
   if (self._progress && self._progress.uploadedTotal === null && self.hasHeader('content-length')) {
     self._progress.uploadedTotal = Number(self.getHeader('content-length'))
   }
@@ -127,7 +133,17 @@ async function runAttempt (self) {
     return self.onRequestError(error)
   }
 
-  await self.onRequestResponse(result)
+  // Response handling (hooks, decompression, cache, retry-on-status) can
+  // throw. Surface those as request errors instead of letting the rejection
+  // be swallowed by safeRunAttempt, which would leave the request hanging.
+  try {
+    await self.onRequestResponse(result)
+  } catch (err) {
+    if (self._aborted) {
+      return
+    }
+    self.onRequestError(err)
+  }
 }
 
 function sendRequest (self) {

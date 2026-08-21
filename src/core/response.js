@@ -265,9 +265,16 @@ function handleResponseData (self, chunk) {
     self._collectedBytes = next
     self._chunks.push(chunk)
   }
-  if (self._readableState.flowing || self._readableState.pipes) {
+  // Only buffer into the readable side when a consumer is (or was) attached.
+  // `flowing === null` means nothing ever piped or listened for data, so we
+  // skip the push entirely: this keeps the callback/promise path fast and
+  // avoids buffering a response nobody reads. When a consumer is present we
+  // push and honour backpressure by pausing the source until `_read()`
+  // resumes it.
+  const readableState = self._readableState
+  if (readableState.flowing !== null || readableState.pipesCount > 0) {
     const ok = self.push(chunk)
-    if (!ok && self.responseContent && self.responseContent.isPaused()) {
+    if (!ok && self.responseContent && !self.responseContent.isPaused()) {
       self.responseContent.pause()
     }
   }
@@ -296,7 +303,8 @@ function handleResponseEnd (self) {
     const response = self.response
     let body
     if (self._chunks.length) {
-      const buf = Buffer.concat(self._chunks)
+      // Fast path: a single chunk needs no concat/copy.
+      const buf = self._chunks.length === 1 ? self._chunks[0] : Buffer.concat(self._chunks)
       body = self.encoding === null ? buf : buf.toString(self.encoding || 'utf8')
       const isUtf8 = self.encoding === 'utf8' || self.encoding === 'utf-8'
       if (isUtf8 && typeof body === 'string' && body.charCodeAt(0) === 0xFEFF) {

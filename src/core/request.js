@@ -16,8 +16,8 @@ const { initRequest } = require('./init')
 const { startRequest, sendRequest, handleRequestError } = require('./start')
 const { handleRequestResponse, handleResponseData, handleResponseEnd } = require('./response')
 
-const extend = helpers.extend
 const safeStringify = helpers.safeStringify
+const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
 
 let reservedNamesCache = null
 function getReservedNames () {
@@ -37,23 +37,20 @@ class Request extends stream.Duplex {
     options = options || {}
 
     self._options = options
+    self._headerNames = new Map()
     self._qs = new Querystring(self)
     self._auth = new Auth(self)
-    self._multipart = new Multipart(self)
     self._redirect = new Redirect(self)
 
-    self._controller = new AbortController()
     self._hasWrites = false
     self._retryAttempts = 0
 
     const reserved = getReservedNames()
-    const nonReserved = {}
     for (const key of Object.keys(options)) {
-      if (!reserved.has(key)) {
-        nonReserved[key] = options[key]
+      if (!reserved.has(key) && !UNSAFE_KEYS.has(key)) {
+        self[key] = options[key]
       }
     }
-    extend(self, nonReserved)
 
     self.readable = true
     self.writable = true
@@ -62,6 +59,16 @@ class Request extends stream.Duplex {
     }
 
     self.init(options)
+  }
+
+  get _controller () {
+    // Lazily create the AbortController on first use instead of on every
+    // request. The mock (no transport) path never touches it, so ordinary
+    // requests skip the allocation entirely.
+    if (!this._abortController) {
+      this._abortController = new AbortController()
+    }
+    return this._abortController
   }
 
   static get debug () {
@@ -222,6 +229,9 @@ class Request extends stream.Duplex {
   multipart (multipart) {
     const self = this
 
+    if (!self._multipart) {
+      self._multipart = new Multipart(self)
+    }
     self._multipart.onRequest(multipart)
 
     if (!self._multipart.chunked) {
@@ -269,16 +279,12 @@ class Request extends stream.Duplex {
   }
 
   getHeader (name) {
-    const headerName = Object.keys(this.headers).find(function (key) {
-      return key.toLowerCase() === name.toLowerCase()
-    })
-    return headerName === undefined ? undefined : this.headers[headerName]
+    const key = this._headerNames.get(String(name).toLowerCase())
+    return key === undefined ? undefined : this.headers[key]
   }
 
   hasHeader (name) {
-    return Object.keys(this.headers).some(function (key) {
-      return key.toLowerCase() === name.toLowerCase()
-    })
+    return this._headerNames.has(String(name).toLowerCase())
   }
 
   setHeader (name, value, merge) {
@@ -292,25 +298,25 @@ class Request extends stream.Duplex {
       }
       return this
     }
-    if (merge && this.hasHeader(name)) {
+    const lower = String(name).toLowerCase()
+    if (merge && this._headerNames.has(lower)) {
       return this
     }
-    const existing = Object.keys(this.headers).find(function (key) {
-      return key.toLowerCase() === name.toLowerCase()
-    })
-    if (existing !== undefined) {
+    const existing = this._headerNames.get(lower)
+    if (existing !== undefined && existing !== name) {
       delete this.headers[existing]
     }
+    this._headerNames.set(lower, name)
     this.headers[name] = value
     return this
   }
 
   removeHeader (name) {
-    const existing = Object.keys(this.headers).find(function (key) {
-      return key.toLowerCase() === name.toLowerCase()
-    })
+    const lower = String(name).toLowerCase()
+    const existing = this._headerNames.get(lower)
     if (existing !== undefined) {
       delete this.headers[existing]
+      this._headerNames.delete(lower)
     }
   }
 
